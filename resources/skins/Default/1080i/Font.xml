@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fonts>
+    <fontset id="skin" unicode="true">
+        <font>
+            <name>font10</name>
+            <filename>arial.ttf</filename>
+            <size>20</size>
+        </font>
+        <font>
+            <name>font12</name>
+            <filename>arial.ttf</filename>
+            <size>24</size>
+        </font>
+        <font>
+            <name>font12_title</name>
+            <filename>arial.ttf</filename>
+            <size>26</size>
+            <style>bold</style>
+        </font>
+        <font>
+            <name>font18</name>
+            <filename>arial.ttf</filename>
+            <size>120</size>
+            <style>bold</style>
+        </font>
+    </fontset>
+</fonts>

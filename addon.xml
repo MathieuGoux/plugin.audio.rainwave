@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<addon id="plugin.audio.rainwave" name="Rainwave" version="1.0.0" provider-name="MG">
+    <requires>
+        <import addon="xbmc.python" version="3.0.1"/>
+    </requires>
+
+    <extension point="xbmc.python.pluginsource" library="default.py">
+        <provides>audio</provides>
+    </extension>
+
+    <extension point="xbmc.service" library="service.py" start="startup"/>
+
+    <extension point="xbmc.addon.metadata">
+        <summary>Rainwave Internet Radio</summary>
+        <description>A simple Kodi Client for Rainwave.cc, an Internet Radio specialized in video game music. Right now, only station selection is allowed.</description>
+        <platform>all</platform>
+        <license>GPL-3.0-or-later</license>
+        <assets>
+            <icon>icon.png</icon>
+            <fanart>resources/media/fanart.jpg</fanart>
+        </assets>
+    </extension>
+</addon>

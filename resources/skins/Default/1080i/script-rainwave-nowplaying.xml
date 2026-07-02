@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<window>
+    <!-- This dialog is shown with show(), never doModal(), and has no
+         focusable controls, so it floats on top of whatever the user
+         is browsing without stealing remote/keyboard input. -->
+    <coordinates>
+        <system>0</system>
+    </coordinates>
+
+    <controls>
+        <control type="group">
+            <posx>60</posx>
+            <posy>60</posy>
+
+            <!-- semi-transparent background panel -->
+            <control type="image">
+                <width>1350</width>
+                <height>276</height>
+                <texture colordiffuse="C0000000">white.png</texture>
+            </control>
+
+            <!-- album art -->
+            <control type="image">
+                <posx>12</posx>
+                <posy>12</posy>
+                <width>212</width>
+                <height>212</height>
+                <texture fallback="icon.png">$INFO[Window(10000).Property(Rainwave.Art)]</texture>
+                <aspectratio aligny="center" alignx="center">scale</aspectratio>
+            </control>
+
+            <!-- now playing label -->
+            <control type="label">
+                <posx>240</posx>
+                <posy>16</posy>
+                <width>1040</width>
+                <height>28</height>
+                <font>font18</font>
+                <textcolor>FFFFC800</textcolor>
+                <label>[B]Now playing[/B]</label>
+                <scroll>true</scroll>
+                <scrollspeed>40</scrollspeed>
+            </control>
+
+            <!-- horizontal line -->
+            <control type="label">
+                <posx>240</posx>
+                <posy>26</posy>
+                <width>1040</width>
+                <height>28</height>
+                <font>font18</font>
+                <textcolor>FFFFC800</textcolor>
+                <label>_____________________________________________________________________</label>
+                <scroll>false</scroll>
+                <scrollspeed>40</scrollspeed>
+            </control>
+
+            <!-- track title -->
+            <control type="label">
+                <posx>240</posx>
+                <posy>60</posy>
+                <width>1040</width>
+                <height>28</height>
+                <font>font12_title</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <label>$INFO[Window(10000).Property(Rainwave.Title)]</label>
+                <scroll>true</scroll>
+                <scrollspeed>40</scrollspeed>
+            </control>
+
+            <!-- artist -->
+            <control type="label">
+                <posx>240</posx>
+                <posy>100</posy>
+                <width>1040</width>
+                <height>24</height>
+                <font>font12</font>
+                <textcolor>FFCCCCCC</textcolor>
+                <label>$INFO[Window(10000).Property(Rainwave.Artist)]</label>
+                <scroll>true</scroll>
+                <scrollspeed>40</scrollspeed>
+            </control>
+
+            <!-- album -->
+            <control type="label">
+                <posx>240</posx>
+                <posy>130</posy>
+                <width>1040</width>
+                <height>22</height>
+                <font>font10</font>
+                <textcolor>FF999999</textcolor>
+                <label>$INFO[Window(10000).Property(Rainwave.Album)]</label>
+                <scroll>true</scroll>
+                <scrollspeed>40</scrollspeed>
+            </control>
+
+            <!-- station name -->
+            <control type="label">
+                <posx>240</posx>
+                <posy>160</posy>
+                <width>1040</width>
+                <height>22</height>
+                <font>font10</font>
+                <textcolor>FF3FA9F5</textcolor>
+                <label>$INFO[Window(10000).Property(Rainwave.Station)]</label>
+            </control>
+
+            <!-- playback progress bar -->
+            <!-- Driven directly from Python (nowplaying_dialog.py),
+                 not $INFO: Rainwave is a live stream, not a seekable
+                 file, so Kodi's own Player.Progress infolabel doesn't
+                 reflect song position. setPercent()/setLabel() are
+                 called on these control IDs once a second instead. -->
+            <control type="progress">
+                <id>501</id>
+                <posx>240</posx>
+                <posy>200</posy>
+                <width>1040</width>
+                <height>20</height>
+            </control>
+
+            <!-- elapsed / total time -->
+            <control type="label">
+                <id>502</id>
+                <posx>1280</posx>
+                <posy>226</posy>
+                <width>1040</width>
+                <height>22</height>
+                <font>font10</font>
+                <textcolor>FFCCCCCC</textcolor>
+                <align>right</align>
+                <label>0:00 / 0:00</label>
+            </control>
+
+        </control>
+    </controls>
+</window>
