@@ -17,7 +17,7 @@ class StationMenu:
             item = xbmcgui.ListItem(label=name)
 
             item.setArt({
-                "thumb": self.art.station(name.lower()),
+                "thumb": self.art.station(name),
                 "icon": self.art.icon(),
                 "fanart": self.art.fanart()
             })
