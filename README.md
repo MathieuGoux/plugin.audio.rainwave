@@ -10,7 +10,7 @@ An addon for Kodi based on the [Rainwave Api](https://rainwave.cc/api4/) for pla
 Some pointers:
 
 * Screensaver is disabled with the `xbmc.executebuiltin('InhibitScreensaver(true)')` subroutine in router.py. Comment the line, erase it or change the bool to "false" to change the setting.
-* Artworks for the station are not provided. You can add them to the `skins/media` subfolder. The names must match the one given in `constants.py`
+* Artworks for the stations are not provided. You can add them to the `skins/media` subfolder. The names must match the ones given in `constants.py` with a `.png` extension.
 * The display box can be edited through `script-rainwave-nowplaying.xml` in the `skins/Default/1080i` subfolder. See the [KodiWiki](https://kodi.wiki/view/Add-on_development) for further documentation.
 
 As I am a complete newbie for python and kodi programming, I do not know if I will update this project. Don't hesitate to fork and expand it if you like!
