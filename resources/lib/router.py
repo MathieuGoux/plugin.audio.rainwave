@@ -54,9 +54,9 @@ class Router:
             xbmc.log(f"[Rainwave] PLAYING URL = {stream_url}", xbmc.LOGINFO)
 
             xbmcplugin.setResolvedUrl(self.handle, True, listitem)
-            
-            #Inhibit Screensaver on play, so the widget is always shown
-            
+
+            # Inhibit Screensaver on play, so the widget is always shown
+
             xbmc.executebuiltin('InhibitScreensaver(true)')
 
             # The now-playing widget itself is shown/hidden by service.py,

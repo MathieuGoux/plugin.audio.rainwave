@@ -3,4 +3,17 @@
         <setting id="user_id" type="text" label="User ID" default=""/>
         <setting id="api_key" type="text" label="API Key" option="hidden"/>
     </category>
+    <category label="Slideshow">
+        <setting id="slideshow_enabled" type="bool"
+                 label="Show picture slideshow behind Now Playing"
+                 default="false"/>
+        <setting id="slideshow_path" type="folder"
+                 label="Picture folder"
+                 default=""
+                 visible="eq(-1,true)"/>
+        <setting id="slideshow_time" type="slider"
+                 label="Seconds per image"
+                 default="8" range="2,1,60" option="int"
+                 visible="eq(-2,true)"/>
+    </category>
 </settings>

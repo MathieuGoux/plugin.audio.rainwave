@@ -8,9 +8,59 @@
     </coordinates>
 
     <controls>
+        <!-- background slideshow, drawn first so it sits behind
+             everything else. Only visible once a folder has actually
+             been configured in Add-on Settings > Slideshow;
+             service.py clears the property when the feature is off,
+             so this stays hidden otherwise. The solid backdrop below
+             sits underneath the crossfade: if the two fading
+             slides ever dip below 100% combined opacity at the same
+             instant, this is what shows through instead of whatever
+             sits behind the dialog. -->
+        <control type="image">
+            <visible>!IsEmpty(Window(10000).Property(Rainwave.SlideshowPath))</visible>
+            <posx>0</posx>
+            <posy>0</posy>
+            <width>1920</width>
+            <height>1080</height>
+            <texture colordiffuse="FF000000">white.png</texture>
+        </control>
+
+        <control type="image">
+            <visible>String.IsEqual(Window(10000).Property(Rainwave.SlideshowActive),A)</visible>
+            <posx>0</posx>
+            <posy>0</posy>
+            <width>1920</width>
+            <height>1080</height>
+            <texture background="true">$INFO[Window(10000).Property(Rainwave.SlideshowImageA)]</texture>
+            <aspectratio>scale</aspectratio>
+            <animation effect="fade" time="1000">VisibleChange</animation>
+        </control>
+
+        <control type="image">
+            <visible>String.IsEqual(Window(10000).Property(Rainwave.SlideshowActive),B)</visible>
+            <posx>0</posx>
+            <posy>0</posy>
+            <width>1920</width>
+            <height>1080</height>
+            <texture background="true">$INFO[Window(10000).Property(Rainwave.SlideshowImageB)]</texture>
+            <aspectratio>scale</aspectratio>
+            <animation effect="fade" time="1000">VisibleChange</animation>
+        </control>
+
+        <!-- dim overlay so the info panel stays readable on top of the photos -->
+        <control type="image">
+            <visible>!IsEmpty(Window(10000).Property(Rainwave.SlideshowPath))</visible>
+            <posx>0</posx>
+            <posy>0</posy>
+            <width>1920</width>
+            <height>1080</height>
+            <texture colordiffuse="80000000">white.png</texture>
+        </control>
+
         <control type="group">
             <posx>60</posx>
-            <posy>60</posy>
+            <posy>760</posy>
 
             <!-- semi-transparent background panel -->
             <control type="image">

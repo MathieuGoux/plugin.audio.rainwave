@@ -1,3 +1,5 @@
+import time
+
 import xbmc
 import xbmcaddon
 import xbmcgui
@@ -5,9 +7,11 @@ import xbmcgui
 from resources.lib.api import RainwaveAPI
 from resources.lib.widget import Widget
 from resources.lib.nowplaying_dialog import NowPlayingDialog
+from resources.lib.slideshow import Slideshow
 from resources.lib.utils import log
 
-POLL_INTERVAL = 5  # seconds
+POLL_INTERVAL = 5  # seconds, Rainwave "now playing" refresh
+TICK = 1  # seconds, main loop granularity (drives the slideshow clock)
 STREAM_HOST = "relay.rainwave.cc"
 
 
@@ -74,6 +78,7 @@ class RainwavePlayerMonitor(xbmc.Player):
 def run():
     api = RainwaveAPI()
     widget = Widget(api)
+    slideshow = Slideshow()
 
     dialog = NowPlayingDialog(
         "script-rainwave-nowplaying.xml",
@@ -83,16 +88,32 @@ def run():
     )
 
     player_monitor = RainwavePlayerMonitor(widget, dialog)
-    kodi_monitor = xbmc.Monitor()
+
+    class SettingsMonitor(xbmc.Monitor):
+        """Reloads the slideshow whenever the user changes its
+        settings, so a running Kodi session picks up the new
+        folder/timing immediately -- no restart required.
+        """
+        def onSettingsChanged(self):
+            slideshow.reload_settings()
+            log("Slideshow settings changed, reloaded")
+
+    kodi_monitor = SettingsMonitor()
+    last_refresh = 0.0
 
     log("Service started")
 
     while not kodi_monitor.abortRequested():
-        if player_monitor.active:
-            song = widget.refresh(player_monitor._current_sid())
-            player_monitor._apply_timing(song)
+        now = time.time()
 
-        if kodi_monitor.waitForAbort(POLL_INTERVAL):
+        if player_monitor.active:
+            if now - last_refresh >= POLL_INTERVAL:
+                song = widget.refresh(player_monitor._current_sid())
+                player_monitor._apply_timing(song)
+                last_refresh = now
+            slideshow.tick(now)
+
+        if kodi_monitor.waitForAbort(TICK):
             break
 
     dialog.hide_widget()
