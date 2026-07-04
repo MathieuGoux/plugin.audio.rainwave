@@ -59,6 +59,24 @@ class RainwaveAPI:
 
     def get_station_info(self, sid=None):
         sid = sid or self.current_sid
+
+        # Rainwave binds a session to a station via the "rw_sid" cookie
+        # as soon as any request is made, and that binding then takes
+        # priority over the "sid" query parameter on every later
+        # request through the same session/cookiejar -- see bootstrap()
+        # below. This object's cookiejar lives for as long as the
+        # RainwaveAPI instance does (in service.py, that's the whole
+        # Kodi session), so without this check the FIRST station ever
+        # queried through it gets "stuck": every later info() call
+        # keeps silently returning that first station's data no matter
+        # what sid is actually requested. Re-bootstrapping whenever the
+        # requested sid changes keeps the cookie and the sid argument
+        # in sync, so switching stations always gets that station's
+        # real data instead of stale ones from whichever station
+        # happened to be polled first.
+        if sid != self.current_sid or not self.bootstrapped:
+            self.bootstrap(sid)
+
         return self._request("info", {"sid": sid})
 
     @staticmethod

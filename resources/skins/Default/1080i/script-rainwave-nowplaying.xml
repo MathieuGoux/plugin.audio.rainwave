@@ -95,7 +95,7 @@
             <!-- horizontal line -->
             <control type="label">
                 <posx>240</posx>
-                <posy>26</posy>
+                <posy>24</posy>
                 <width>1040</width>
                 <height>28</height>
                 <font>font18</font>
