@@ -73,6 +73,10 @@ class RainwavePlayerMonitor(xbmc.Player):
             self.active = False
             self.dialog.hide_widget()
             self.widget.clear()
+            # Playback has actually stopped, so allow the screensaver
+            # to kick in again (it was inhibited in router.py while
+            # a Rainwave stream was playing).
+            xbmc.executebuiltin('InhibitScreensaver(false)')
 
 
 def run():
@@ -116,6 +120,8 @@ def run():
         if kodi_monitor.waitForAbort(TICK):
             break
 
+    if player_monitor.active:
+        xbmc.executebuiltin('InhibitScreensaver(false)')
     dialog.hide_widget()
     log("Service stopped")
 
