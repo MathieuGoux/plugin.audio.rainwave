@@ -3,7 +3,7 @@ A simple Kodi addon for Rainwave Internet Radio.
 
 ------------------------------
 
-Version 2.0.1.
+Version 2.0.2.
 
 An addon for Kodi based on the [Rainwave Api](https://rainwave.cc/api4/) for playing the different stations (All, Overclocked Remixes, Chiptunes etc.) and displaying a dialog box akin to the [Twitch Widget](https://rainwave.cc/twitch).
 
