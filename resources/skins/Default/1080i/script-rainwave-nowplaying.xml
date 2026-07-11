@@ -71,8 +71,8 @@
 
             <!-- album art -->
             <control type="image">
-                <posx>12</posx>
-                <posy>12</posy>
+                <posx>42</posx>
+                <posy>22</posy>
                 <width>212</width>
                 <height>212</height>
                 <texture fallback="icon.png">$INFO[Window(10000).Property(Rainwave.Art)]</texture>
@@ -81,8 +81,8 @@
 
             <!-- now playing label -->
             <control type="label">
-                <posx>240</posx>
-                <posy>16</posy>
+                <posx>270</posx>
+                <posy>26</posy>
                 <width>1040</width>
                 <height>28</height>
                 <font>font18</font>
@@ -94,21 +94,21 @@
 
             <!-- horizontal line -->
             <control type="label">
-                <posx>240</posx>
-                <posy>24</posy>
+                <posx>270</posx>
+                <posy>34</posy>
                 <width>1040</width>
                 <height>28</height>
                 <font>font18</font>
                 <textcolor>FFFFC800</textcolor>
-                <label>_____________________________________________________________________</label>
+                <label>[B]________________________________________________________________[/B]</label>
                 <scroll>false</scroll>
                 <scrollspeed>40</scrollspeed>
             </control>
 
             <!-- track title -->
             <control type="label">
-                <posx>240</posx>
-                <posy>60</posy>
+                <posx>270</posx>
+                <posy>70</posy>
                 <width>1040</width>
                 <height>28</height>
                 <font>font12_title</font>
@@ -120,8 +120,8 @@
 
             <!-- artist -->
             <control type="label">
-                <posx>240</posx>
-                <posy>100</posy>
+                <posx>270</posx>
+                <posy>110</posy>
                 <width>1040</width>
                 <height>24</height>
                 <font>font12</font>
@@ -133,8 +133,8 @@
 
             <!-- album -->
             <control type="label">
-                <posx>240</posx>
-                <posy>130</posy>
+                <posx>270</posx>
+                <posy>140</posy>
                 <width>1040</width>
                 <height>22</height>
                 <font>font10</font>
@@ -146,8 +146,8 @@
 
             <!-- station name -->
             <control type="label">
-                <posx>240</posx>
-                <posy>160</posy>
+                <posx>270</posx>
+                <posy>170</posy>
                 <width>1040</width>
                 <height>22</height>
                 <font>font10</font>
@@ -163,8 +163,8 @@
                  called on these control IDs once a second instead. -->
             <control type="progress">
                 <id>501</id>
-                <posx>240</posx>
-                <posy>200</posy>
+                <posx>270</posx>
+                <posy>210</posy>
                 <width>1040</width>
                 <height>20</height>
             </control>
@@ -172,8 +172,8 @@
             <!-- elapsed / total time -->
             <control type="label">
                 <id>502</id>
-                <posx>1280</posx>
-                <posy>226</posy>
+                <posx>1310</posx>
+                <posy>236</posy>
                 <width>1040</width>
                 <height>22</height>
                 <font>font10</font>
@@ -182,6 +182,206 @@
                 <label>0:00 / 0:00</label>
             </control>
 
+        </control>
+
+        <!-- previous / next panel, sitting to the right of the
+             now-playing card at the same height. Split into two equal
+             halves by a horizontal divider: "up next" on top,
+             "previously played" below; each laid out exactly like a
+             smaller now-playing card (artwork left, gold header +
+             divider, title, artist) so the same visual language
+             repeats at both the panel and row level.
+             Rainwave doesn't expose live vote counts for an open
+             election (see api.py), so there's no reliable single
+             "winner" to show in the top half; instead widget.py
+             rotates through every candidate one at a time, advancing
+             once per 5-second poll, so all of them get shown in turn
+             rather than guessing.
+             Hidden entirely when the "Show previous / up next panel"
+             setting is off. -->
+        <control type="group">
+            <visible>String.IsEqual(Window(10000).Property(Rainwave.ShowPrevNext),true)</visible>
+            <posx>1430</posx>
+            <posy>760</posy>
+
+            <!-- semi-transparent background panel, matching the now-playing card -->
+            <control type="image">
+                <width>424</width>
+                <height>276</height>
+                <texture colordiffuse="C0000000">white.png</texture>
+            </control>
+
+            <!-- divider splitting "up next" from "previously played" -->
+            <control type="image">
+                <posx>24</posx>
+                <posy>138</posy>
+                <width>376</width>
+                <height>1</height>
+                <texture colordiffuse="FF555555">white.png</texture>
+            </control>
+
+            <!-- ===== up next (top half) ===== -->
+            <!-- Rainwave doesn't expose live vote counts for an open
+                 election (see api.py), so widget.py rotates through
+                 every candidate here instead of guessing a winner,
+                 swapping which one is shown every 15 seconds. Same
+                 double-buffered A/B slot + fade technique as the
+                 picture slideshow above: two overlapping copies of
+                 this row, each bound to one slot, with the inactive
+                 one always pre-populated before the swap so the fade
+                 crossfades between two fully-loaded candidates rather
+                 than popping through a blank state. -->
+
+            <control type="group">
+                <visible>String.IsEqual(Window(10000).Property(Rainwave.NextActive),A)</visible>
+                <animation effect="fade" time="600">VisibleChange</animation>
+
+                <control type="image">
+                    <posx>12</posx>
+                    <posy>12</posy>
+                    <width>106</width>
+                    <height>106</height>
+                    <texture fallback="icon.png">$INFO[Window(10000).Property(Rainwave.NextArtA)]</texture>
+                    <aspectratio aligny="center" alignx="center">scale</aspectratio>
+                </control>
+
+                <control type="label">
+                    <posx>130</posx>
+                    <posy>56</posy>
+                    <width>282</width>
+                    <height>24</height>
+                    <font>font12</font>
+                    <textcolor>FFFFFFFF</textcolor>
+                    <label>$INFO[Window(10000).Property(Rainwave.NextTitleA)]</label>
+                    <scroll>true</scroll>
+                    <scrollspeed>40</scrollspeed>
+                </control>
+
+                <control type="label">
+                    <posx>130</posx>
+                    <posy>88</posy>
+                    <width>282</width>
+                    <height>22</height>
+                    <font>font10</font>
+                    <textcolor>FFCCCCCC</textcolor>
+                    <label>$INFO[Window(10000).Property(Rainwave.NextArtistA)]</label>
+                    <scroll>true</scroll>
+                    <scrollspeed>40</scrollspeed>
+                </control>
+            </control>
+
+            <control type="group">
+                <visible>String.IsEqual(Window(10000).Property(Rainwave.NextActive),B)</visible>
+                <animation effect="fade" time="600">VisibleChange</animation>
+
+                <control type="image">
+                    <posx>12</posx>
+                    <posy>12</posy>
+                    <width>106</width>
+                    <height>106</height>
+                    <texture fallback="icon.png">$INFO[Window(10000).Property(Rainwave.NextArtB)]</texture>
+                    <aspectratio aligny="center" alignx="center">scale</aspectratio>
+                </control>
+
+                <control type="label">
+                    <posx>130</posx>
+                    <posy>56</posy>
+                    <width>282</width>
+                    <height>24</height>
+                    <font>font12</font>
+                    <textcolor>FFFFFFFF</textcolor>
+                    <label>$INFO[Window(10000).Property(Rainwave.NextTitleB)]</label>
+                    <scroll>true</scroll>
+                    <scrollspeed>40</scrollspeed>
+                </control>
+
+                <control type="label">
+                    <posx>130</posx>
+                    <posy>88</posy>
+                    <width>282</width>
+                    <height>22</height>
+                    <font>font10</font>
+                    <textcolor>FFCCCCCC</textcolor>
+                    <label>$INFO[Window(10000).Property(Rainwave.NextArtistB)]</label>
+                    <scroll>true</scroll>
+                    <scrollspeed>40</scrollspeed>
+                </control>
+            </control>
+
+            <control type="label">
+                <posx>130</posx>
+                <posy>16</posy>
+                <width>282</width>
+                <height>22</height>
+                <font>font10</font>
+                <textcolor>FFFFC800</textcolor>
+                <label>[B]Coming up[/B]</label>
+            </control>
+
+            <control type="label">
+                <posx>130</posx>
+                <posy>24</posy>
+                <width>282</width>
+                <height>22</height>
+                <font>font10</font>
+                <textcolor>FFFFC800</textcolor>
+                <label>[B]_________________[/B]</label>
+            </control>
+
+            <!-- ===== previously played (bottom half) ===== -->
+
+            <control type="image">
+                <posx>12</posx>
+                <posy>158</posy>
+                <width>106</width>
+                <height>106</height>
+                <texture fallback="icon.png">$INFO[Window(10000).Property(Rainwave.PreviousArt)]</texture>
+                <aspectratio aligny="center" alignx="center">scale</aspectratio>
+            </control>
+
+            <control type="label">
+                <posx>130</posx>
+                <posy>162</posy>
+                <width>282</width>
+                <height>22</height>
+                <font>font10</font>
+                <textcolor>FFFFC800</textcolor>
+                <label>[B]Previously played[/B]</label>
+            </control>
+
+            <control type="label">
+                <posx>130</posx>
+                <posy>170</posy>
+                <width>282</width>
+                <height>22</height>
+                <font>font10</font>
+                <textcolor>FFFFC800</textcolor>
+                <label>[B]_________________[/B]</label>
+            </control>
+
+            <control type="label">
+                <posx>130</posx>
+                <posy>202</posy>
+                <width>282</width>
+                <height>24</height>
+                <font>font12</font>
+                <textcolor>FFFFFFFF</textcolor>
+                <label>$INFO[Window(10000).Property(Rainwave.PreviousTitle)]</label>
+                <scroll>true</scroll>
+                <scrollspeed>40</scrollspeed>
+            </control>
+
+            <control type="label">
+                <posx>130</posx>
+                <posy>228</posy>
+                <width>282</width>
+                <height>22</height>
+                <font>font10</font>
+                <textcolor>FFCCCCCC</textcolor>
+                <label>$INFO[Window(10000).Property(Rainwave.PreviousArtist)]</label>
+                <scroll>true</scroll>
+                <scrollspeed>40</scrollspeed>
+            </control>
         </control>
     </controls>
 </window>

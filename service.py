@@ -34,6 +34,8 @@ class RainwavePlayerMonitor(xbmc.Player):
         self.dialog = dialog
         self.active = False
         self.home = xbmcgui.Window(10000)
+        self._not_playing_streak = 0
+        self._last_song_key = None
 
     def _is_rainwave_stream(self):
         try:
@@ -45,28 +47,151 @@ class RainwavePlayerMonitor(xbmc.Player):
         sid = self.home.getProperty("Rainwave.CurrentStation")
         return int(sid) if sid else None
 
+    def _check_active_state(self):
+        # A live internet radio stream can hiccup (a brief buffering
+        # stall, a momentary reconnect) without playback actually
+        # ending from the listener's point of view -- but Kodi's
+        # engine can still fire onPlayBackStopped/onPlayBackError for
+        # that split second. Previously we trusted those callbacks
+        # unconditionally and deactivated on the spot; since audio
+        # then kept playing on the same continuous connection,
+        # onAVStarted never fired again to reactivate us, so polling
+        # (and the widget) stayed dead for the rest of the session --
+        # exactly matching "first song shows, then nothing updates
+        # again."
+        #
+        # Instead, treat every callback as just a prompt to re-check
+        # reality via isPlayingAudio()/_is_rainwave_stream(), and also
+        # call this once a second from the main loop regardless of
+        # any callback firing at all.
+        try:
+            is_playing = self.isPlayingAudio() and self._is_rainwave_stream()
+        except Exception:
+            is_playing = False
+
+        if is_playing:
+            self._not_playing_streak = 0
+            if not self.active:
+                self._activate()
+            return
+
+        # Require two consecutive "not playing" readings (this check
+        # runs at most once a second) before actually deactivating.
+        # isPlayingAudio() can itself read False for a single instant
+        # around a brief internal player hiccup even while audio never
+        # actually stops coming out of the speakers -- debouncing here
+        # absorbs that without meaningfully delaying a real stop, which
+        # still gets caught within ~2 seconds either way.
+        self._not_playing_streak += 1
+        if self._not_playing_streak >= 2 and self.active:
+            self._deactivate()
+
+    def _activate(self):
+        self.active = True
+        song = self.widget.refresh(self._current_sid())
+        self._apply_timing(song)
+        self._update_player_info(song)
+        self.dialog.display()
+
     def onAVStarted(self):
-        if self._is_rainwave_stream():
-            self.active = True
-            song = self.widget.refresh(self._current_sid())
-            self._apply_timing(song)
-            self.dialog.display()
+        self._check_active_state()
 
     def _apply_timing(self, song):
+        # song is None when refresh() had no usable data this cycle --
+        # nothing to apply, keep the progress bar as it was.
+        if song is None:
+            return
         self.dialog.set_song_timing(
             song.get("start_actual"),
             song.get("length"),
             song.get("server_time"),
         )
 
+    def _update_player_info(self, song):
+        # Keep the actual playing item's info tag current too, not just
+        # the skin widget -- router.py sets this once at play time, but
+        # the track (and therefore title/artist/album/art) changes every
+        # few minutes as Rainwave moves on to the next song. Without this,
+        # Kore (and any other JSON-RPC based remote) would keep showing
+        # whatever song was playing when the station was first tuned in.
+        if song is None:
+            return
+        if not self._is_rainwave_stream():
+            return
+        try:
+            # Building a fresh, detached xbmcgui.ListItem() here and
+            # calling updateInfoTag() on it looks reasonable and is
+            # what Kodi's own official examples show, but in practice
+            # (confirmed by multiple reports on the Kodi forums hitting
+            # this exact symptom) title/artist/album set this way don't
+            # reliably reach Player.GetItem/JSON-RPC -- only properties
+            # like art (set via the separate setArt() call) get
+            # through. The combination that actually works is fetching
+            # the REAL currently-playing item via getPlayingItem(),
+            # mutating its own music info tag in place, and passing
+            # that same item back to updateInfoTag() -- not a new one.
+            item = self.getPlayingItem()
+            tag = item.getMusicInfoTag()
+            tag.setTitle(song.get("title", ""))
+            tag.setArtist(song.get("artist", ""))
+            tag.setAlbum(song.get("album", ""))
+            tag.setMediaType("song")
+
+            # Without a duration, Kodi has nothing to compute a
+            # percentage/progress from -- Player.GetProperties'
+            # "totaltime" stays effectively unset, so Kore has no data
+            # to draw a progress bar with at all (not a refresh
+            # problem like title/artist, an actual missing-data one).
+            length = song.get("length")
+            if length:
+                tag.setDuration(int(length))
+
+            art = song.get("art", "")
+            if art:
+                item.setArt({"thumb": art, "icon": art})
+            self.updateInfoTag(item)
+
+            # Kodi's internal playback clock starts counting from 0
+            # the moment *we* tuned in, not from wherever Rainwave
+            # actually was in the track -- so without a seek, the
+            # progress bar would be accurate in shape but wrong in
+            # position (e.g. showing 0:15 elapsed on a track that
+            # was actually already 2 minutes in). Only do this once
+            # per song (tracked via _last_song_key), not on every
+            # 5-second poll -- seeking repeatedly on an unchanged
+            # song would cause an audible jump/stutter each time.
+            #
+            # This may simply do nothing on some Kodi versions/
+            # configurations: IsLive=true (set in router.py, needed
+            # to stop brief stalls being misread as end-of-track) can
+            # also make Kodi refuse seeks on the grounds that a live
+            # stream has no meaningful seek target. If so, the
+            # progress bar will still render (from the duration set
+            # above) but start counting from 0 each song rather than
+            # the song's true elapsed position -- a cosmetic gap, not
+            # a functional one.
+            song_key = (song.get("title"), song.get("artist"), song.get("album"))
+            if song_key != self._last_song_key:
+                self._last_song_key = song_key
+                start_actual = song.get("start_actual")
+                server_time = song.get("server_time")
+                if start_actual and server_time:
+                    elapsed = max(0, server_time - start_actual)
+                    try:
+                        self.seekTime(elapsed)
+                    except Exception as e:
+                        log(f"Could not seek to song position: {e}")
+        except Exception as e:
+            log(f"Could not update player info tag: {e}")
+
     def onPlayBackStopped(self):
-        self._deactivate()
+        self._check_active_state()
 
     def onPlayBackEnded(self):
-        self._deactivate()
+        self._check_active_state()
 
     def onPlayBackError(self):
-        self._deactivate()
+        self._check_active_state()
 
     def _deactivate(self):
         if self.active:
@@ -79,10 +204,23 @@ class RainwavePlayerMonitor(xbmc.Player):
             xbmc.executebuiltin('InhibitScreensaver(false)')
 
 
+def _reload_display_settings(home):
+    # Small enough (one bool) not to warrant its own module -- mirrors
+    # the same "read setting, write a window property, skin reads the
+    # property" pattern Slideshow.reload_settings() uses. The skin's
+    # previous/next panel is gated on Rainwave.ShowPrevNext via a
+    # <visible> condition, so flipping this takes effect immediately,
+    # no restart needed.
+    enabled = xbmcaddon.Addon().getSettingBool("show_prev_next")
+    home.setProperty("Rainwave.ShowPrevNext", "true" if enabled else "false")
+
+
 def run():
     api = RainwaveAPI()
     widget = Widget(api)
     slideshow = Slideshow()
+    home = xbmcgui.Window(10000)
+    _reload_display_settings(home)
 
     dialog = NowPlayingDialog(
         "script-rainwave-nowplaying.xml",
@@ -94,13 +232,14 @@ def run():
     player_monitor = RainwavePlayerMonitor(widget, dialog)
 
     class SettingsMonitor(xbmc.Monitor):
-        """Reloads the slideshow whenever the user changes its
-        settings, so a running Kodi session picks up the new
-        folder/timing immediately -- no restart required.
+        """Reloads settings-driven state whenever the user changes it,
+        so a running Kodi session picks up changes immediately -- no
+        restart required.
         """
         def onSettingsChanged(self):
             slideshow.reload_settings()
-            log("Slideshow settings changed, reloaded")
+            _reload_display_settings(home)
+            log("Settings changed, reloaded")
 
     kodi_monitor = SettingsMonitor()
     last_refresh = 0.0
@@ -110,11 +249,15 @@ def run():
     while not kodi_monitor.abortRequested():
         now = time.time()
 
+        player_monitor._check_active_state()
+
         if player_monitor.active:
             if now - last_refresh >= POLL_INTERVAL:
                 song = widget.refresh(player_monitor._current_sid())
                 player_monitor._apply_timing(song)
+                player_monitor._update_player_info(song)
                 last_refresh = now
+            widget.tick(now)
             slideshow.tick(now)
 
         if kodi_monitor.waitForAbort(TICK):

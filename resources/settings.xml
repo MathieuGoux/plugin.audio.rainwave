@@ -1,7 +1,8 @@
 <settings>
-    <category label="Account">
-        <setting id="user_id" type="text" label="User ID" default=""/>
-        <setting id="api_key" type="text" label="API Key" option="hidden"/>
+    <category label="Display">
+        <setting id="show_prev_next" type="bool"
+                 label="Show previous / up next panel"
+                 default="true"/>
     </category>
     <category label="Slideshow">
         <setting id="slideshow_enabled" type="bool"
