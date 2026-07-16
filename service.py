@@ -8,6 +8,8 @@ from resources.lib.api import RainwaveAPI
 from resources.lib.widget import Widget
 from resources.lib.nowplaying_dialog import NowPlayingDialog
 from resources.lib.slideshow import Slideshow
+from resources.lib.game_art import GameArtProvider
+from resources.lib.sync_queue import SyncQueue
 from resources.lib.utils import log
 
 POLL_INTERVAL = 5  # seconds, Rainwave "now playing" refresh
@@ -28,10 +30,12 @@ class RainwavePlayerMonitor(xbmc.Player):
     what we read here to know which sid to poll.
     """
 
-    def __init__(self, widget, dialog):
+    def __init__(self, widget, dialog, sync_queue, slideshow):
         super().__init__()
         self.widget = widget
         self.dialog = dialog
+        self.sync_queue = sync_queue
+        self.slideshow = slideshow
         self.active = False
         self.home = xbmcgui.Window(10000)
         self._not_playing_streak = 0
@@ -88,10 +92,39 @@ class RainwavePlayerMonitor(xbmc.Player):
 
     def _activate(self):
         self.active = True
+        # Fresh tune-in: forget any leftover lag-buffer history from a
+        # previous session so its first display isn't held back
+        # waiting on stale data (see SyncQueue.reset()).
+        self.sync_queue.reset()
+        now = time.time()
         song = self.widget.refresh(self._current_sid())
+        self.sync_queue.push(song, now)
+        self.dialog.display()
+        # Nothing will actually be due yet at offset > 0 -- the widget
+        # stays blank/previous-state until the buffer delay elapses,
+        # same as the real audio does -- but this keeps the two code
+        # paths (activation vs the regular poll below) identical
+        # instead of duplicating the apply logic here.
+        self._pump_sync(now)
+
+    def _pump_sync(self, now):
+        """Apply whichever polled snapshot has finished waiting out
+        the configured stream buffer delay, if any (see sync_queue.py).
+        Call this every tick, independent of the 5-second poll cadence
+        -- the delay is usually longer than one poll interval, so a
+        snapshot from a few polls back is often the one that's due.
+        """
+        song = self.sync_queue.poll(now)
+        if song is None:
+            return
+        self.widget.apply_current(song)
         self._apply_timing(song)
         self._update_player_info(song)
-        self.dialog.display()
+        # Same delayed data as everything else above -- in auto mode,
+        # this is what keeps the background changing to match the
+        # game whose audio is actually playing, not whichever game
+        # the API most recently reported (see slideshow.py/game_art.py).
+        self.slideshow.set_current_game(song.get("album"))
 
     def onAVStarted(self):
         self._check_active_state()
@@ -105,6 +138,7 @@ class RainwavePlayerMonitor(xbmc.Player):
             song.get("start_actual"),
             song.get("length"),
             song.get("server_time"),
+            self.sync_queue.offset,
         )
 
     def _update_player_info(self, song):
@@ -161,6 +195,15 @@ class RainwavePlayerMonitor(xbmc.Player):
             # 5-second poll -- seeking repeatedly on an unchanged
             # song would cause an audible jump/stutter each time.
             #
+            # Same re-basing as set_song_timing(): this method only
+            # runs once the sync queue has decided the song is due for
+            # display, `sync_queue.offset` seconds after the server
+            # reported it -- so `server_time - start_actual` alone
+            # would seek `offset` seconds further into the song than
+            # what the listener is actually about to hear, right at
+            # the moment it's applied. Subtracting the offset lines
+            # the seek target up with the delayed display instead.
+            #
             # This may simply do nothing on some Kodi versions/
             # configurations: IsLive=true (set in router.py, needed
             # to stop brief stalls being misread as end-of-track) can
@@ -176,7 +219,7 @@ class RainwavePlayerMonitor(xbmc.Player):
                 start_actual = song.get("start_actual")
                 server_time = song.get("server_time")
                 if start_actual and server_time:
-                    elapsed = max(0, server_time - start_actual)
+                    elapsed = max(0, server_time - start_actual - self.sync_queue.offset)
                     try:
                         self.seekTime(elapsed)
                     except Exception as e:
@@ -198,6 +241,7 @@ class RainwavePlayerMonitor(xbmc.Player):
             self.active = False
             self.dialog.hide_widget()
             self.widget.clear()
+            self.sync_queue.reset()
             # Playback has actually stopped, so allow the screensaver
             # to kick in again (it was inhibited in router.py while
             # a Rainwave stream was playing).
@@ -218,7 +262,9 @@ def _reload_display_settings(home):
 def run():
     api = RainwaveAPI()
     widget = Widget(api)
-    slideshow = Slideshow()
+    game_art = GameArtProvider()
+    slideshow = Slideshow(game_art)
+    sync_queue = SyncQueue()
     home = xbmcgui.Window(10000)
     _reload_display_settings(home)
 
@@ -229,7 +275,7 @@ def run():
         "1080i",
     )
 
-    player_monitor = RainwavePlayerMonitor(widget, dialog)
+    player_monitor = RainwavePlayerMonitor(widget, dialog, sync_queue, slideshow)
 
     class SettingsMonitor(xbmc.Monitor):
         """Reloads settings-driven state whenever the user changes it,
@@ -238,6 +284,7 @@ def run():
         """
         def onSettingsChanged(self):
             slideshow.reload_settings()
+            sync_queue.reload_settings()
             _reload_display_settings(home)
             log("Settings changed, reloaded")
 
@@ -254,9 +301,15 @@ def run():
         if player_monitor.active:
             if now - last_refresh >= POLL_INTERVAL:
                 song = widget.refresh(player_monitor._current_sid())
-                player_monitor._apply_timing(song)
-                player_monitor._update_player_info(song)
+                sync_queue.push(song, now)
                 last_refresh = now
+            # Runs every TICK, not just on a poll: the buffer delay is
+            # normally longer than POLL_INTERVAL, so the snapshot that
+            # becomes due is usually one from a few polls back, and
+            # checking every second is what makes the eventual display
+            # update land close to the real audio transition instead
+            # of up to POLL_INTERVAL seconds late.
+            player_monitor._pump_sync(now)
             widget.tick(now)
             slideshow.tick(now)
 

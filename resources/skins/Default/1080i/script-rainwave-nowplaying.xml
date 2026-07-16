@@ -26,26 +26,65 @@
             <texture colordiffuse="FF000000">white.png</texture>
         </control>
 
-        <control type="image">
+        <!-- Hero art from SteamGridDB is very wide/short relative to
+             a 16:9 screen (e.g. 1920x620, ~3.1:1 vs 1.78:1). "scale"
+             aspectratio (crop-to-fill) was zooming in and
+             cropping the left/right edges off to cover the full
+             1920x1080 frame. Each slot is now a group with two
+             layers instead of a single image: a cropped, dimmed
+             blow-up filling the frame (so there's no empty space),
+             behind the same image again at aspectratio="keep" (fully
+             visible, letterboxed) on top: the classic "blurred
+             backdrop behind a letterboxed picture" look, minus an
+             actual blur (Kodi's <image> control has no blur filter
+             to reach for here; dimming alone is enough to keep it
+             from reading as a second, competing copy of the image).
+             The fade animation moves to the group so both layers of
+             a slot cross-fade together as one unit. -->
+        <control type="group">
             <visible>String.IsEqual(Window(10000).Property(Rainwave.SlideshowActive),A)</visible>
-            <posx>0</posx>
-            <posy>0</posy>
-            <width>1920</width>
-            <height>1080</height>
-            <texture background="true">$INFO[Window(10000).Property(Rainwave.SlideshowImageA)]</texture>
-            <aspectratio>scale</aspectratio>
             <animation effect="fade" time="1000">VisibleChange</animation>
+
+            <control type="image">
+                <posx>0</posx>
+                <posy>0</posy>
+                <width>1920</width>
+                <height>1080</height>
+                <texture background="true" colordiffuse="70FFFFFF">$INFO[Window(10000).Property(Rainwave.SlideshowImageA)]</texture>
+                <aspectratio aligny="center" alignx="center">scale</aspectratio>
+            </control>
+
+            <control type="image">
+                <posx>0</posx>
+                <posy>0</posy>
+                <width>1920</width>
+                <height>1080</height>
+                <texture background="true">$INFO[Window(10000).Property(Rainwave.SlideshowImageA)]</texture>
+                <aspectratio aligny="center" alignx="center">keep</aspectratio>
+            </control>
         </control>
 
-        <control type="image">
+        <control type="group">
             <visible>String.IsEqual(Window(10000).Property(Rainwave.SlideshowActive),B)</visible>
-            <posx>0</posx>
-            <posy>0</posy>
-            <width>1920</width>
-            <height>1080</height>
-            <texture background="true">$INFO[Window(10000).Property(Rainwave.SlideshowImageB)]</texture>
-            <aspectratio>scale</aspectratio>
             <animation effect="fade" time="1000">VisibleChange</animation>
+
+            <control type="image">
+                <posx>0</posx>
+                <posy>0</posy>
+                <width>1920</width>
+                <height>1080</height>
+                <texture background="true" colordiffuse="70FFFFFF">$INFO[Window(10000).Property(Rainwave.SlideshowImageB)]</texture>
+                <aspectratio aligny="center" alignx="center">scale</aspectratio>
+            </control>
+
+            <control type="image">
+                <posx>0</posx>
+                <posy>0</posy>
+                <width>1920</width>
+                <height>1080</height>
+                <texture background="true">$INFO[Window(10000).Property(Rainwave.SlideshowImageB)]</texture>
+                <aspectratio aligny="center" alignx="center">keep</aspectratio>
+            </control>
         </control>
 
         <!-- dim overlay so the info panel stays readable on top of the photos -->
@@ -67,6 +106,28 @@
                 <width>1350</width>
                 <height>276</height>
                 <texture colordiffuse="C0000000">white.png</texture>
+            </control>
+
+            <!-- settings shortcut: opens this addon's settings directly
+                 from the playback view. The dialog otherwise forwards
+                 all remote/keyboard navigation to the window underneath
+                 (see nowplaying_dialog.py) rather than reacting to it
+                 itself, so a focusable control here would never
+                 actually receive an OK/Select press. Mouse and touch
+                 clicks bypass that forwarding entirely and reach
+                 controls directly though, so this works for mouse and
+                 touch users. Remote/keyboard users get the same action
+                 via the context-menu button instead (see onAction() in
+                 nowplaying_dialog.py). -->
+            <control type="button" id="503">
+                <posx>1300</posx>
+                <posy>14</posy>
+                <width>36</width>
+                <height>36</height>
+                <texturefocus colordiffuse="FFFFFFFF">settings.png</texturefocus>
+                <texturenofocus colordiffuse="A0FFFFFF">settings.png</texturenofocus>
+                <onclick>Addon.OpenSettings(plugin.audio.rainwave)</onclick>
+                <label></label>
             </control>
 
             <!-- album art -->

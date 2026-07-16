@@ -5,8 +5,12 @@ class Widget:
     """Writes now-playing data to Home (10000) window properties.
 
     The now-playing skin XML reads these via $INFO[Window(10000)
-    .Property(...)] expressions, so calling refresh() is all that's
-    needed to update whatever's currently on screen.
+    .Property(...)] expressions. refresh() polls the API and updates
+    the "up next"/"previous" panels immediately, but returns the
+    current-song data rather than displaying it -- the caller runs
+    that through SyncQueue and calls apply_current() once it's due,
+    so the display stays in step with the (buffered) audio rather
+    than jumping ahead of it.
     """
 
     PREFIX = "Rainwave."
@@ -24,6 +28,22 @@ class Widget:
         self._active_slot = "A"
         self._next_rotation_due = 0
 
+    def apply_current(self, song):
+        """Write the *currently playing* song's fields to Window(10000).
+
+        Split out from refresh() so the caller can hold a freshly
+        polled snapshot back for a few seconds (via sync_queue.py)
+        before it lands on screen, instead of it appearing the instant
+        the API reports it -- see SyncQueue's docstring for why.
+        """
+        if song is None:
+            return
+        self.window.setProperty(self.PREFIX + "Title", song.get("title", ""))
+        self.window.setProperty(self.PREFIX + "Artist", song.get("artist", ""))
+        self.window.setProperty(self.PREFIX + "Album", song.get("album", ""))
+        self.window.setProperty(self.PREFIX + "Art", song.get("art", ""))
+        self.window.setProperty(self.PREFIX + "Station", song.get("station", ""))
+
     def refresh(self, sid=None):
         song = self.api.get_now_playing(sid)
 
@@ -33,11 +53,17 @@ class Widget:
         if song is None:
             return None
 
-        self.window.setProperty(self.PREFIX + "Title", song["title"])
-        self.window.setProperty(self.PREFIX + "Artist", song["artist"])
-        self.window.setProperty(self.PREFIX + "Album", song["album"])
-        self.window.setProperty(self.PREFIX + "Art", song["art"])
-        self.window.setProperty(self.PREFIX + "Station", song["station"])
+        # Deliberately NOT writing Title/Artist/Album/Art/Station here
+        # anymore -- that's now apply_current()'s job. This method
+        # still runs on every 5-second poll (sync_queue.py needs a
+        # fresh snapshot that often to keep its lag buffer accurate),
+        # but the *current song* fields are what's out of sync with
+        # the audio, so the caller stages them through SyncQueue and
+        # only calls apply_current() once the configured buffer delay
+        # has elapsed. The "up next"/"previous" panels below aren't
+        # audio-synced in the same sense (they describe songs that
+        # haven't played yet, or already finished), so those stay
+        # immediate.
 
         # The next election is still open for voting and Rainwave
         # doesn't expose live vote counts through this endpoint (see

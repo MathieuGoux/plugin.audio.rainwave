@@ -7,6 +7,7 @@ from .stations import StationMenu
 from .player import Player
 from .views import MainMenu
 from .api import RainwaveAPI
+from .game_art import GameArtProvider
 
 class Router:
     def __init__(self):
@@ -120,5 +121,19 @@ class Router:
         if action == "request":
             self.api.request_song(int(self.params["song"][0]), int(self.params["station"][0]))
             xbmcgui.Dialog().notification("Rainwave", "Requested")
+            xbmcplugin.setResolvedUrl(self.handle, False, xbmcgui.ListItem())
+            return
+
+        if action == "clear_art_cache":
+            # Invoked via the "Clear art cache" button in Add-on
+            # Settings (settings.xml: action="RunPlugin(...)"). This
+            # runs in its own short-lived process, separate from the
+            # long-running service.py -- so it constructs its own
+            # GameArtProvider rather than reaching into the running
+            # service's, which isn't accessible from here anyway.
+            dialog = xbmcgui.Dialog()
+            if dialog.yesno("Rainwave", "Delete all cached background art? This can't be undone."):
+                GameArtProvider().clear()
+                dialog.notification("Rainwave", "Art cache cleared")
             xbmcplugin.setResolvedUrl(self.handle, False, xbmcgui.ListItem())
             return

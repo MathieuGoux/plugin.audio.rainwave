@@ -19,6 +19,13 @@ TIME_LABEL_CONTROL_ID = 502
 # window underneath via the Action() builtin, so browsing feels
 # unaffected by the widget being on screen.
 #
+# ACTION_CONTEXT_MENU is the one exception: rather than forwarding it,
+# it opens this addon's own settings -- "bring up the context menu for
+# whatever's on screen" naturally lands on the widget that's actually
+# on top, and it's the only way a remote/keyboard-only user can reach
+# settings without leaving the now-playing view (mouse/touch users
+# also have the on-screen gear icon, see script-rainwave-nowplaying.xml).
+#
 # This only covers keyboard/remote/gamepad navigation, not mouse
 # clicks/drags -- Kodi has no equivalent generic "replay this mouse
 # event elsewhere" builtin. For remote-driven HTPC use this covers
@@ -34,10 +41,11 @@ FORWARDED_ACTIONS = {
     xbmcgui.ACTION_PARENT_DIR: "ParentDir",
     xbmcgui.ACTION_PREVIOUS_MENU: "Back",
     xbmcgui.ACTION_SHOW_INFO: "Info",
-    xbmcgui.ACTION_CONTEXT_MENU: "ContextMenu",
     xbmcgui.ACTION_NEXT_ITEM: "NextItem",
     xbmcgui.ACTION_PREV_ITEM: "PreviousItem",
 }
+
+ADDON_ID = "plugin.audio.rainwave"
 
 
 class NowPlayingDialog(xbmcgui.WindowXMLDialog):
@@ -64,6 +72,7 @@ class NowPlayingDialog(xbmcgui.WindowXMLDialog):
         self._song_start = None
         self._song_length = None
         self._clock_offset = 0.0
+        self._display_offset = 0
 
     def display(self):
         if not self._visible:
@@ -83,7 +92,7 @@ class NowPlayingDialog(xbmcgui.WindowXMLDialog):
     def is_visible(self):
         return self._visible
 
-    def set_song_timing(self, start_actual, length, server_time):
+    def set_song_timing(self, start_actual, length, server_time, offset=0):
         """Feed fresh timing data from the API into the progress bar.
 
         start_actual and server_time both come from Rainwave's own
@@ -93,12 +102,26 @@ class NowPlayingDialog(xbmcgui.WindowXMLDialog):
         that keeps the bar accurate even if the box's clock is off.
         Safe to call repeatedly as the same song keeps polling; the
         bar just keeps ticking, no jump.
+
+        `offset` is the configured stream-sync delay (see
+        sync_queue.py) in seconds. Without it, elapsed time here is
+        computed against the server's *true* clock -- but this method
+        itself is only called `offset` seconds after that clock event,
+        via the sync queue, so the bar would already read `offset`
+        seconds in on the very song it just switched to, and would
+        hit 100% (and freeze there) `offset` seconds before the
+        listener actually reaches the end of the song. Subtracting
+        `offset` from every elapsed-time calculation re-bases the
+        clock onto "what the listener is actually hearing right now"
+        instead of "what the server says is happening right now",
+        which is what the progress bar should represent.
         """
         if not start_actual or not length:
             return
         self._song_start = start_actual
         self._song_length = length
         self._clock_offset = server_time - time.time()
+        self._display_offset = offset
 
     def _start_progress_thread(self):
         if self._progress_thread and self._progress_thread.is_alive():
@@ -118,7 +141,7 @@ class NowPlayingDialog(xbmcgui.WindowXMLDialog):
         if not self._song_start or not self._song_length:
             return
 
-        now_server = time.time() + self._clock_offset
+        now_server = time.time() + self._clock_offset - self._display_offset
         elapsed = max(0.0, now_server - self._song_start)
         elapsed = min(elapsed, self._song_length)
         percent = (elapsed / self._song_length) * 100
@@ -141,6 +164,9 @@ class NowPlayingDialog(xbmcgui.WindowXMLDialog):
         return "{0}:{1:02d}".format(seconds // 60, seconds % 60)
 
     def onAction(self, action):
+        if action.getId() == xbmcgui.ACTION_CONTEXT_MENU:
+            xbmc.executebuiltin(f"Addon.OpenSettings({ADDON_ID})")
+            return
         name = FORWARDED_ACTIONS.get(action.getId())
         if name:
             target = xbmcgui.getCurrentWindowId()

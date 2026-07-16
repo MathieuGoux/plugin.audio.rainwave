@@ -4,17 +4,50 @@
                  label="Show previous / up next panel"
                  default="true"/>
     </category>
+    <category label="Playback Sync">
+        <setting id="stream_sync_enabled" type="bool"
+                 label="Sync now-playing display to actual audio"
+                 help="Delays the title, artwork and progress bar so they change when the audio itself changes, instead of when Rainwave reports it -- compensates for the stream's own buffering delay."
+                 default="true"/>
+        <setting id="stream_sync_offset" type="slider"
+                 label="Stream buffer delay (seconds)"
+                 help="How far behind Rainwave's reported now-playing the actual audio arrives. Increase if the title/artwork still change before you hear the new song; decrease if they change after. 15-20 is typical."
+                 default="17" range="0,1,30" option="int"
+                 visible="eq(-1,true)"/>
+    </category>
     <category label="Slideshow">
         <setting id="slideshow_enabled" type="bool"
                  label="Show picture slideshow behind Now Playing"
                  default="false"/>
+        <setting id="slideshow_source" type="enum"
+                 label="Background source"
+                 help="Local folder: shuffle through your own pictures, unrelated to what's playing. Automatic: fetch each game's own art from SteamGridDB and switch to it as that game plays."
+                 values="Local folder|Automatic (fetch by game)"
+                 default="0"
+                 visible="eq(-1,true)"/>
         <setting id="slideshow_path" type="folder"
                  label="Picture folder"
+                 help="Used as the picture source in Local folder mode. In Automatic mode, used as a fallback whenever no game art has been found yet (or at all) for the current song -- optional there, but avoids a blank background in the meantime."
                  default=""
-                 visible="eq(-1,true)"/>
+                 visible="eq(-2,true)"/>
+        <setting id="steamgriddb_api_key" type="text"
+                 label="SteamGridDB API key"
+                 help="Free -- generate one at steamgriddb.com/profile/preferences/api after creating an account. Required for automatic background art; nothing is fetched without it."
+                 default=""
+                 visible="eq(-3,true) + eq(-2,1)"/>
+        <setting id="art_cache_limit_mb" type="slider"
+                 label="Art cache size limit (MB)"
+                 help="Fetched game art is kept permanently so it doesn't need re-downloading -- once this limit is reached, the least recently shown games' art is deleted first to make room. 0 = unlimited."
+                 default="500" range="0,50,5000" option="int"
+                 visible="eq(-4,true) + eq(-3,1)"/>
+        <setting id="clear_art_cache" type="action"
+                 label="Clear art cache"
+                 help="Deletes every downloaded background image and starts fresh. Asks for confirmation first."
+                 action="RunPlugin(plugin://plugin.audio.rainwave/?action=clear_art_cache)"
+                 visible="eq(-5,true) + eq(-4,1)"/>
         <setting id="slideshow_time" type="slider"
                  label="Seconds per image"
                  default="8" range="2,1,60" option="int"
-                 visible="eq(-2,true)"/>
+                 visible="eq(-6,true)"/>
     </category>
 </settings>
