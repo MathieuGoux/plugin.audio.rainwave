@@ -3,7 +3,7 @@ A simple Kodi addon for Rainwave Internet Radio.
 
 ------------------------------
 
-Version 2.2.0.
+Version 2.8.0.
 
 An addon for Kodi based on the [Rainwave Api](https://rainwave.cc/api4/) for playing the different stations (All, Overclocked Remixes, Chiptunes etc.) and displaying a dialog box akin to the [Twitch Widget](https://rainwave.cc/twitch) for the current, previously played and next songs.
 
@@ -12,11 +12,15 @@ Some pointers:
 * Screensaver is disabled with the `xbmc.executebuiltin('InhibitScreensaver(true)')` subroutine in `router.py`. Comment the line, erase it or change the bool to "false" to change the setting.
 * Artworks for the stations are not provided. You can add them to the `skins/media` subfolder. The names must match the ones given in `constants.py` with a `.png` extension.
 * The display boxes can be edited through `script-rainwave-nowplaying.xml` in the `skins/Default/1080i` subfolder. See the [KodiWiki](https://kodi.wiki/view/Add-on_development) for further documentation.
-* Settings allow to define a background folder, to display images during playback.
+* Settings allow to define a background images during playback, with two main settings:
+
+** Local folder: define a local image folder.
+** Automatic (fetch by game): need a [SteamGridDB](steamgriddb.com) account and an API-key (once connected, `Preferences > API tab`). Fetching is based on the song metadata and automatically retrieves "heroes" artworks to display during playback. Fetching mode is a fuzzy search: if there is no exact match, the script erases the last words of the song title until something clicks. Otherwise, it loops back to the local folder solution. Artworks are locally stored in the `userdate/addon_data/plugin.audio.rainwave/art_cache` folder. You can set a limit for the size of the folder (0 = unlimited, the oldest artworks downloaded are erased) or erase all of it at once with a "Clear Cache" button.
+
 * Settings allow to enable / disable the Coming Up / Previously played box. 
-* Authentification through API doesn't work, as Rainwave pivoted to a discord-only auth some years ago. As such, there seems to be no way to rate / request songs.
+* Authentification through the Rainwave API doesn't work, as Rainwave pivoted to a discord-only auth some years ago. As such, there seems to be no way to rate / request songs.
 * The "Coming Up" next info roll through all candidates of the current polls, as there is no live update of the voting counts.
-* There is a buffer of 5~15 seconds before audio playback, and thus a discrepancy between audio and the song metadata (artwork, title, progress bar, etc.). I didn't find a way to reduce it or circumvent it alas (maybe in a future revision of the app).
+* There is a buffer of 5~15 seconds before audio playback, and thus a discrepancy between audio and the song metadata (artwork, title, progress bar, etc.). You can circumvent it with a "Playback Sync" setting. First audio automatically synchronize audio with the song metadata, and the slider allows to define a buffer delay in seconds to further tweak the playback. Be aware that if you checked the "Sync to actual audio", playback will start a few seconds after launching the app, so don't worry!
 
 Have fun!
 
