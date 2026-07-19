@@ -19,7 +19,7 @@ Some pointers:
 
 * Settings allow to enable / disable the Coming Up / Previously played box. A folder next to the stations one allows access to the 4 previously played songs on a given channel. Future update will better integrate it into the UI.
 * Authentification through the Rainwave API doesn't work, as Rainwave pivoted to a discord-only auth some years ago. As such, there seems to be no way to rate / request songs.
-* The "Coming Up" next info roll through all candidates of the current polls, as there is no live update of the voting counts.
+* The "Coming Up" info box roll through all candidates of the current polls, as there is no live update of the voting counts.
 * There is a buffer of 5~15 seconds before audio playback, and thus a discrepancy between audio and the song metadata (artwork, title, progress bar, etc.). You can circumvent it with a "Playback Sync" setting. The first option automatically synchronizes audio with the song metadata, and the slider allows to define a buffer delay in seconds to further tweak the playback. Be aware that if you checked the "Sync to actual audio", playback will start a few seconds after launching the app, so don't worry! I added a "Tuning in..." placeholder with a spinner to further communicate than the wait is not a freeze.
 
 Have fun!
