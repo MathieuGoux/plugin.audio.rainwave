@@ -76,6 +76,7 @@ class Slideshow:
         self.next_change = 0
         self.preloaded = False
         self._current_game = None
+        self._current_song_title = None
         self.reload_settings()
 
     def reload_settings(self):
@@ -117,6 +118,7 @@ class Slideshow:
         self.preloaded = False
         self.next_change = 0
         self._current_game = None
+        self._current_song_title = None
         self._files_key = None
 
     def _scan_local(self, path):
@@ -135,18 +137,25 @@ class Slideshow:
         if not self.files:
             log(f"Slideshow: no images found in {path}")
 
-    def set_current_game(self, game_title):
-        """Auto mode only: called with whatever game is currently
-        (and, per the sync queue, audibly) playing. A no-op unless
-        that's actually a change, so it's cheap to call on every
-        delayed song application without worrying about redundant
-        lookups -- GameArtProvider.get() is itself cheap/non-blocking
-        too, but there's no reason to even call it for an unchanged
-        title.
+    def set_current_game(self, game_title, song_title=None):
+        """Auto mode only: called with whatever game (and, per the
+        sync queue, audibly playing song) is currently on. A no-op
+        unless the game is actually a change, so it's cheap to call on
+        every delayed song application without worrying about
+        redundant lookups -- GameArtProvider.get() is itself
+        cheap/non-blocking too, but there's no reason to even call it
+        for an unchanged title.
+
+        song_title is only actually used the first time this game
+        needs a fresh lookup (see GameArtProvider.get()/
+        _resolve_game_id()) -- it's fine that it doesn't get updated
+        again for later songs of the same still-unresolved album; see
+        get()'s docstring for why that's harmless.
         """
         if self.source != SOURCE_AUTO or game_title == self._current_game:
             return
         self._current_game = game_title
+        self._current_song_title = song_title
         # Deliberately not clearing self.files here: keep showing the
         # previous game's art (nothing on screen changes until tick()
         # below finds new files ready) rather than blanking out for
@@ -159,7 +168,7 @@ class Slideshow:
 
         if self.source == SOURCE_AUTO:
             if self.game_art and self._current_game:
-                images = self.game_art.get(self._current_game)
+                images = self.game_art.get(self._current_game, self._current_song_title)
             else:
                 images = []
 
@@ -230,6 +239,21 @@ class Slideshow:
             self.active_slot = "A"
             self.preloaded = False
             self.next_change = now + self.interval
+            return
+
+        if len(self.files) <= 1:
+            # Nothing to rotate to -- most often a game with only one
+            # hero image on SteamGridDB (common for less well-known
+            # titles). Without this, the periodic swap logic below
+            # would still fire every `interval` seconds, flipping the
+            # active slot between two copies of the *same* picture:
+            # visually a no-op in principle, but Kodi still treats
+            # that as a fresh texture load each time, which can show
+            # up as a brief flicker for no actual change. So it just
+            # stays on screen, untouched, for as long as it's the
+            # only image available (i.e. for the rest of the song, or
+            # until a source/game change brings in something new via
+            # the transition handling above).
             return
 
         lead = min(PRELOAD_LEAD, self.interval / 2)

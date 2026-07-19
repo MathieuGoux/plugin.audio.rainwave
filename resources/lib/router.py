@@ -8,6 +8,7 @@ from .player import Player
 from .views import MainMenu
 from .api import RainwaveAPI
 from .game_art import GameArtProvider
+from .history import HistoryMenu
 
 class Router:
     def __init__(self):
@@ -28,6 +29,15 @@ class Router:
         if action == "stations":
             StationMenu(self.handle).show()
             xbmcplugin.endOfDirectory(self.handle)
+            return
+
+        if action == "history":
+            HistoryMenu(self.handle, self.api).show_stations()
+            return
+
+        if action == "history_songs":
+            sid = int(self.params["id"][0])
+            HistoryMenu(self.handle, self.api).show_songs(sid)
             return
             
         if action == "play":

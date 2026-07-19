@@ -11,5 +11,5 @@ class MainMenu:
 
     def show(self):
         self._add("Stations", "stations")
-        """self._add("Now Playing", "now")
-        self._add("History", "history")"""
+        self._add("History", "history")
+        """self._add("Now Playing", "now")"""

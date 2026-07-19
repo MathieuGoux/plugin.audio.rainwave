@@ -5,12 +5,16 @@ import os
 import re
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import xbmc
 import xbmcaddon
+import xbmcgui
 import xbmcvfs
 
 from .constants import USER_AGENT
@@ -48,7 +52,34 @@ CACHE_SUBDIR = "art_cache"
 #      400 was being cached as "no match").
 #   3: added the fuzzy title-variant fallback below -- titles that
 #      failed outright before (no exact match) may resolve now.
-CACHE_SCHEMA_VERSION = 3
+#   4: added the song-title hint fallback below -- albums that still
+#      failed even after fuzzy variants may resolve now.
+#   5: song-title hint extraction is no longer bracket-only (also
+#      catches bare "from Game" and delimiter-separated titles like
+#      "Song / Game"), and every variant now gets an ASCII-folded
+#      counterpart tried alongside it for titles with accented
+#      characters -- either can newly resolve something that failed
+#      before.
+#   6: album titles now also get subtitle stripping (": Subtitle" /
+#      ". Subtitle"), an explicit from/bracket hint, and truncation
+#      from the front as well as the end -- covers cases like "Theme
+#      from Super Meat Boy" or a colon-separated subtitle mismatch
+#      that none of the previous variants could reach. "Live" was
+#      also removed from the non-game-hint denylist.
+#   7: added a weaker "of"/"for" connector hint (e.g. "The Life and
+#      Times of Final Fantasy IX"), front/back truncation is now
+#      interleaved instead of exhausting the end before the front
+#      ever got a turn, and the song-title fallback now also tries
+#      the song title's own words when no bracket/from/delimiter hint
+#      is present at all (e.g. "Super Mario Extravaganza!") -- all
+#      three can newly resolve titles that failed outright before.
+#   8: added stripping of a trailing "-Descriptor-" dash-wrapped
+#      segment (e.g. "Romancing SaGa -Minstrel Song-"), which sits in
+#      the *middle* of what a "from"/bracket hint captures rather
+#      than at either end -- can newly resolve titles that failed
+#      outright, or previously relied on a much weaker/later variant
+#      to accidentally reach the same answer.
+CACHE_SCHEMA_VERSION = 8
 
 # How long to remember "no match / no art found for this title" before
 # letting a future lookup try again. Long enough that a title with no
@@ -74,16 +105,13 @@ MANIFEST_SAVE_INTERVAL = 5 * 60  # seconds
 # Rainwave's "album" field is often an arrangement/compilation *album*
 # title, not the literal game name it's talking about -- e.g. "Super
 # Mario Bros Remix" or "Final Fantasy Reinvented" won't autocomplete-
-# match anything on SteamGridDB, because neither is a real game. Both
-# examples share a shape though: [real game name] + [one modifier
-# word tacked on the end]. _title_variants() exploits that shape --
-# strip a known modifier word if the title ends with one, and failing
-# that, progressively drop trailing words -- to build a short list of
-# alternate search queries to fall back through when the exact title
-# comes up empty. It's a heuristic, not a real fuzzy-search API (
-# SteamGridDB's search itself is closer to substring matching than
-# typo-tolerant fuzzy matching), so it won't catch everything, but it
-# resolves the common "extra word(s) appended" case cheaply.
+# match anything on SteamGridDB, because neither is a real game.
+# _title_variants() below exploits a handful of common shapes this
+# takes to build a short list of alternate search queries to fall back
+# through when the exact title comes up empty. It's a heuristic, not a
+# real fuzzy-search API (SteamGridDB's search itself is closer to
+# substring matching than typo-tolerant fuzzy matching), so it won't
+# catch everything, but it resolves the common cases cheaply.
 _STRIP_SUFFIXES = re.compile(
     r"\s*[:\-]?\s*("
     r"Rearranged|Remastered|Reimagined|Reinvented|Revisited|Rebooted|"
@@ -95,45 +123,215 @@ _STRIP_SUFFIXES = re.compile(
     re.IGNORECASE,
 )
 
+# A trailing "-Descriptor-" segment, dash on both sides -- a fairly
+# common convention (particularly in Japanese game OST naming, often
+# carried through untranslated into arrangement album titles/hints)
+# for tacking a specific version/arrangement name onto the end of a
+# title, e.g. "Romancing SaGa -Minstrel Song-". Unlike _STRIP_SUFFIXES
+# this isn't a fixed word list -- it's a shape (dash ... dash at the
+# very end, with no dash in between) -- since the descriptor itself
+# varies too much to enumerate. A real game title ending in a bare
+# "-word-" pair is rare enough that stripping this is safe in
+# practice.
+_DASH_WRAPPED_SUFFIX = re.compile(r"\s*-[^-]+-\s*$")
+
+# A "(from Game)" / "(Game)" / bare "from Game" hint, wherever it
+# appears in a title -- shared by _title_variants() below (applied to
+# album titles, where the real game name sometimes sits at the very
+# end, e.g. "Theme from Super Meat Boy", which plain trailing-word
+# truncation could never isolate on its own since it only trims from
+# the end) and _extract_game_hints() further down (applied to song
+# titles, which layers a couple of extra, riskier delimiter-based
+# conventions on top -- see there).
+_BRACKETED_HINT = re.compile(
+    r"[\(\[]\s*(?:from\s+)?([^\(\)\[\]]+?)\s*[\)\]]\s*$",
+    re.IGNORECASE,
+)
+_BARE_FROM_HINT = re.compile(r"\bfrom\s+(.+?)\s*$", re.IGNORECASE)
+
+# A softer version of the hint above, using "of"/"for" as the
+# connector instead of the much more specific "from" -- e.g. "The Life
+# and Times of Final Fantasy IX", "Themes for Chrono Trigger".
+# Meaningfully less reliable (both words are common enough to show up
+# for reasons unrelated to naming a source game -- "Ocarina of Time"
+# is itself part of a real game's name), which is why it's tried only
+# after the stronger "from"/bracket hint has already had its chance --
+# see _title_variants() and _extract_game_hints().
+_WEAK_CONNECTOR_HINT = re.compile(r"\b(?:of|for)\s+(.+?)\s*$", re.IGNORECASE)
+
+# A hint is sometimes a style/arrangement descriptor rather than a
+# game name -- "(Piano Arrangement)", "(Remix)" -- which would
+# otherwise get treated as one and searched as such. Full match only
+# (not a substring check): a hint like "Piano Collection of Chrono
+# Trigger" should still pass through untouched. Deliberately does NOT
+# include "Live" -- unlike the others here, "Live" is common enough as
+# an actual, meaningful part of real game titles that excluding it
+# outright risked throwing away genuine hints more often than it
+# caught false ones.
+_NON_GAME_HINTS = re.compile(
+    r"^(re)?mix(ed)?$|"
+    r"^cover( version)?$|^acoustic( version)?$|"
+    r"^orchestral$|^orchestrated$|"
+    r"^piano (arrangement|version|cover)$|^instrumental$|"
+    r"^demo$|^extended( mix)?$|^acapella$|"
+    r"^arrangement$|^remaster(ed)?( version)?$|"
+    r"^tribute$|^medley$|^mashup$|^megamix$",
+    re.IGNORECASE,
+)
+
 # Below this many words, further truncation stops being "drop a
 # descriptor word" and starts being "guess at a completely different,
 # much more generic game" -- e.g. truncating "Chrono Trigger" to
 # "Chrono" risks matching some other, wrong game entirely.
 MIN_TRUNCATED_WORDS = 2
 
-# Total alternate queries to try (including the original and the
-# suffix-stripped version) before giving up -- keeps a title with no
-# real match from generating an unbounded number of API calls.
-MAX_VARIANTS = 5
+# Total alternate queries to try (including the original) before
+# giving up -- keeps a title with no real match from generating an
+# unbounded number of API calls. There's now enough going on in
+# _title_variants() (subtitle stripping, a from/bracket hint,
+# diacritic folding, truncation from *both* ends) that this needed
+# raising from the original 5 to give the later, lower-confidence
+# strategies a realistic chance of getting a turn.
+MAX_VARIANTS = 8
+
+
+def _strip_diacritics(text):
+    """ASCII-fold accented characters (e.g. "e" for "e" with an acute
+    accent) via Unicode decomposition. SteamGridDB's own search
+    doesn't reliably match across accented/unaccented spellings --
+    "Ragnarok Online" needed to be searched without the O-umlaut to
+    find a match at all, even though the game's real, correct name
+    does have one (some entries are just spelled plainly, or
+    misspelled, by whoever submitted them) -- so every variant below
+    gets an ASCII-folded counterpart added alongside it.
+    """
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+def _strip_subtitle(title):
+    """Drop a ": Subtitle" or ". Subtitle" tail, or None if neither
+    applies. Rainwave's album title and SteamGridDB's listed name
+    don't always agree on how much of a subtitle to include -- e.g.
+    "Dragon Quest III" vs. SteamGridDB's "Dragon Quest III: The Seeds
+    of Salvation" (or the reverse) -- and colon-separated subtitles
+    are common enough in game titles generally that it's worth trying
+    the short form even when the query wasn't actually truncated for
+    any other reason.
+
+    Colon is unambiguous and always tried. Period is the riskier of
+    the two -- title-case abbreviations like "Dr. Mario" or
+    "F.E.A.R." also contain periods -- so it's only used if there are
+    still at least two words left before it, long enough to read as
+    an actual subtitle break rather than an abbreviation.
+    """
+    for sep in (":", "."):
+        if sep not in title:
+            continue
+        prefix = title.split(sep, 1)[0].strip()
+        if prefix and prefix != title and (sep == ":" or len(prefix.split()) >= 2):
+            return prefix
+    return None
+
+
+def _extract_from_hint(title):
+    """Pull a "(from Game)" / "(Game)" / bare "from Game" hint out of
+    `title`, or None. See the comment above _BRACKETED_HINT.
+    """
+    for pattern in (_BRACKETED_HINT, _BARE_FROM_HINT):
+        match = pattern.search(title)
+        if match:
+            hint = match.group(1).strip().strip("()[] ")
+            if hint and not _NON_GAME_HINTS.match(hint):
+                return hint
+    return None
+
+
+def _extract_weak_hint(title):
+    """Same idea as _extract_from_hint(), but for the softer "of"/
+    "for" connector -- see the comment above _WEAK_CONNECTOR_HINT for
+    why it's kept separate and lower-priority.
+    """
+    match = _WEAK_CONNECTOR_HINT.search(title)
+    if match:
+        hint = match.group(1).strip().strip("()[] ")
+        if hint and not _NON_GAME_HINTS.match(hint):
+            return hint
+    return None
 
 
 def _title_variants(title):
     """Build an ordered, deduplicated list of search queries to try
-    for a game title: the title as-is, then with known trailing
-    modifier words stripped, then progressively shorter truncations
-    of that. See the comment above _STRIP_SUFFIXES for why.
+    for a game title, roughly most-to-least confident: the title
+    as-is, a subtitle-stripped form, known trailing modifier words
+    stripped, an explicit "from Game" hint if the title has one, then
+    progressively shorter truncations from the end *and* the front --
+    each with an ASCII-folded counterpart added right next to it
+    wherever accents make one meaningfully different (see
+    _strip_diacritics()).
     """
     variants = []
 
     def add(v):
         v = v.strip()
-        if v and v not in variants:
-            variants.append(v)
+        if not v or v in variants:
+            return
+        variants.append(v)
+        folded = _strip_diacritics(v)
+        if folded != v and folded not in variants:
+            variants.append(folded)
 
     add(title)
+
+    subtitle_stripped = _strip_subtitle(title)
+    if subtitle_stripped:
+        add(subtitle_stripped)
 
     cleaned = title
     while True:
         stripped = _STRIP_SUFFIXES.sub("", cleaned).strip()
+        if stripped == cleaned:
+            stripped = _DASH_WRAPPED_SUFFIX.sub("", cleaned).strip()
         if not stripped or stripped == cleaned:
             break
         cleaned = stripped
     add(cleaned)
 
+    subtitle_stripped = _strip_subtitle(cleaned)
+    if subtitle_stripped:
+        add(subtitle_stripped)
+
+    hint = _extract_from_hint(cleaned)
+    if hint:
+        add(hint)
+
+    weak_hint = _extract_weak_hint(cleaned)
+    if weak_hint and weak_hint != hint:
+        add(weak_hint)
+
     words = cleaned.split()
-    while len(words) > MIN_TRUNCATED_WORDS and len(variants) < MAX_VARIANTS:
-        words = words[:-1]
-        add(" ".join(words))
+
+    # Interleaved, not "every trailing truncation, then every leading
+    # one": a title like "The Life and Times of Final Fantasy IX" has
+    # its real game name sitting right at the end, but exhausting the
+    # whole trailing-truncation budget first (dropping "IX", then
+    # "Fantasy", then "Final"...) would burn through every available
+    # slot on useless fragments before leading truncation ever got a
+    # turn to approach it from the other direction. Interleaving
+    # means both directions make progress within the same budget.
+    trailing = list(words)
+    leading = list(words)
+    while len(variants) < MAX_VARIANTS and (
+        len(trailing) > MIN_TRUNCATED_WORDS or len(leading) > MIN_TRUNCATED_WORDS
+    ):
+        if len(trailing) > MIN_TRUNCATED_WORDS:
+            trailing = trailing[:-1]
+            add(" ".join(trailing))
+            if len(variants) >= MAX_VARIANTS:
+                break
+        if len(leading) > MIN_TRUNCATED_WORDS:
+            leading = leading[1:]
+            add(" ".join(leading))
 
     return variants[:MAX_VARIANTS]
 
@@ -155,6 +353,131 @@ def _best_candidate(candidates, reference):
         return difflib.SequenceMatcher(None, name.lower(), reference.lower()).ratio()
 
     return max(candidates, key=score)
+
+
+# Slash, tilde, pipe, en/em dash, or a spaced hyphen -- deliberately
+# *not* a bare unspaced hyphen, which is far too likely to just be
+# part of a compound word in the song title itself (e.g. "Hard-Boiled").
+# Song titles only: album titles don't get this one, since it's a
+# riskier convention that's really only established for how remix
+# communities format individual *track* names.
+_HINT_SEGMENT_SPLIT = re.compile(r"\s+(?:/|~|\||\u2013|\u2014|-{1,2})\s+")
+
+# Cap on how many song-title-derived queries get tried in total (across
+# every hint and every hint's own _title_variants() cascade, plus the
+# raw-song-title fallback below) -- this tier is already several
+# heuristics deep, each with its own fuzzy expansion, so left uncapped
+# a single odd title could otherwise generate a couple dozen API calls
+# for what's ultimately still just a guess.
+MAX_SONG_TITLE_VARIANTS = 8
+
+
+def _extract_game_hints(song_title):
+    """Return a list of candidate game-name hints pulled out of a song
+    title, most-likely-first -- or an empty list if nothing looks
+    extractable. Track titles in remix/arrangement communities very
+    often name the source game explicitly somewhere in the title --
+    e.g. "Battle BGM Remix (from Final Fantasy VII)", "Battle BGM
+    remix from Final Fantasy VII", "BGM 2 / Super Meat Boy" -- which
+    names the real game far more reliably than the *album/compilation*
+    title does (e.g. "Battle Music Remixes vol. 3", which isn't a real
+    game at all). None of the patterns here are reliable on their own
+    -- a title might just happen to contain the word "from", or a
+    " - " that's part of the song name rather than a separator --
+    which is exactly why this whole thing is only tried as a
+    last-resort fallback, once every album-title-based variant has
+    already failed (see _resolve_game_id()): a wrong guess here just
+    means one more failed search, not a wrong picture on screen.
+    """
+    hints = []
+
+    def add(h):
+        h = (h or "").strip().strip("()[] ")
+        if h and not _NON_GAME_HINTS.match(h) and h not in hints:
+            hints.append(h)
+
+    hint = _extract_from_hint(song_title)
+    if hint:
+        add(hint)
+
+    weak_hint = _extract_weak_hint(song_title)
+    if weak_hint:
+        add(weak_hint)
+
+    # Delimiter-separated segments -- try the last segment first
+    # (Rainwave/OCR-style titles that use this convention most often
+    # put the source game at the end, e.g. "BGM 2 / Super Meat Boy"),
+    # then the first segment as a weaker guess for the reverse case.
+    segments = [s.strip() for s in _HINT_SEGMENT_SPLIT.split(song_title) if s.strip()]
+    if len(segments) > 1:
+        add(segments[-1])
+        add(segments[0])
+
+    return hints
+
+
+def _song_title_variants(song_title):
+    """Fallback search queries derived from the song title -- first
+    from any explicit hints (see _extract_game_hints()), then from
+    the song title's own words. That second part matters: plenty of
+    song titles just plainly mention the game in prose, with no
+    bracket, "from", or delimiter to key off at all (e.g. "Super Mario
+    Extravaganza!") -- without it, a title like that would fall
+    through this whole tier with nothing tried at all, even though the
+    same truncate-from-both-ends approach _title_variants() already
+    uses for album titles stands a real chance of isolating "Super
+    Mario" from it.
+    """
+    if not song_title:
+        return []
+
+    variants = []
+
+    def extend(new_variants):
+        for v in new_variants:
+            if v not in variants:
+                variants.append(v)
+        return len(variants) >= MAX_SONG_TITLE_VARIANTS
+
+    for hint in _extract_game_hints(song_title):
+        if extend(_title_variants(hint)):
+            return variants[:MAX_SONG_TITLE_VARIANTS]
+
+    extend(_title_variants(song_title))
+
+    return variants[:MAX_SONG_TITLE_VARIANTS]
+
+
+# How long to back off after a 429 if SteamGridDB's response doesn't
+# include a Retry-After header (or it's unparseable) -- a reasonable
+# default cooldown rather than guessing something too short and
+# tripping the limit again almost immediately.
+DEFAULT_RATE_LIMIT_BACKOFF = 60  # seconds
+
+
+def _parse_retry_after(header_value):
+    """Parse a Retry-After header value -- either a plain number of
+    seconds (the common case for API rate limits) or an HTTP-date --
+    into a number of seconds to wait. Falls back to
+    DEFAULT_RATE_LIMIT_BACKOFF if the header is missing or malformed.
+    """
+    if not header_value:
+        return DEFAULT_RATE_LIMIT_BACKOFF
+    header_value = header_value.strip()
+    if header_value.isdigit():
+        return int(header_value)
+    try:
+        target = parsedate_to_datetime(header_value)
+        if target.tzinfo is None:
+            # RFC 7231 HTTP-dates are always GMT, but some servers omit
+            # the explicit tzinfo that parsedate_to_datetime would
+            # otherwise attach -- assume GMT rather than treating it
+            # as naive-local and getting the delta wrong.
+            target = target.replace(tzinfo=timezone.utc)
+        delta = (target - datetime.now(timezone.utc)).total_seconds()
+        return max(1, int(delta))
+    except Exception:
+        return DEFAULT_RATE_LIMIT_BACKOFF
 
 
 def _cache_key(game_title):
@@ -195,12 +518,27 @@ class GameArtProvider:
         self._api_key = ""
         self._cache_limit_mb = 0
         self._last_manifest_save = 0.0
+        # Rate-limit backoff: see _handle_http_error(). 0 means "not
+        # currently backing off".
+        self._rate_limited_until = 0.0
+        # Missing-key nudge: see get(). Fires at most once per
+        # GameArtProvider instance (i.e. once per addon service
+        # process lifetime, since service.py builds exactly one) --
+        # not persisted across Kodi restarts, so it'll nudge again on
+        # a fresh session if the key is still missing then, but won't
+        # repeat itself while Kodi keeps running.
+        self._warned_no_key = False
         self.reload_settings()
 
     def reload_settings(self):
         addon = xbmcaddon.Addon()
         self._api_key = addon.getSettingString("steamgriddb_api_key").strip()
         self._cache_limit_mb = addon.getSettingInt("art_cache_limit_mb")
+        if self._api_key:
+            # A key was just added (or was already present) -- if it's
+            # later removed again, the nudge is fair game to fire once
+            # more.
+            self._warned_no_key = False
         profile = xbmcvfs.translatePath(addon.getAddonInfo("profile"))
         self._cache_dir = os.path.join(profile, CACHE_SUBDIR)
         xbmcvfs.mkdirs(self._cache_dir)
@@ -328,13 +666,37 @@ class GameArtProvider:
             self._save_manifest()
             self._last_manifest_save = time.time()
 
-    def get(self, game_title):
+    def get(self, game_title, song_title=None):
         """Return whatever background image paths are already cached
         for this title (a list, possibly empty), and kick off a
         background fetch if we've never looked it up (or the last
         attempt failed long enough ago to be worth retrying).
+
+        song_title is an optional fallback signal used only if a fetch
+        actually happens and the album-title cascade comes up empty --
+        see _resolve_game_id(). It has no effect on cache lookups
+        (caching is keyed on game_title alone), so passing a different
+        song_title for a later song of the same already-resolved (or
+        already permanently-failed) album is harmless -- it's simply
+        never consulted again once that album has an answer either way.
         """
-        if not game_title or not self._api_key:
+        if not game_title:
+            return []
+
+        if not self._api_key:
+            # Automatic mode with no key configured just fetches
+            # nothing, silently, forever -- which looks identical to
+            # "this is broken" from the outside. A single notification
+            # the first time this is hit is enough to point at the fix
+            # without nagging every time a new song plays.
+            if not self._warned_no_key:
+                self._warned_no_key = True
+                xbmcgui.Dialog().notification(
+                    "Rainwave",
+                    "Add a SteamGridDB API key in Add-on Settings to enable automatic backgrounds",
+                    xbmcgui.NOTIFICATION_INFO,
+                    6000,
+                )
             return []
 
         key = _cache_key(game_title)
@@ -355,19 +717,35 @@ class GameArtProvider:
             if is_pending:
                 return []
 
+            if time.time() < self._rate_limited_until:
+                # Still backing off from a 429 -- see
+                # _handle_http_error(). Don't spawn a new attempt that
+                # would just get rate-limited again; the next poll
+                # after the backoff window passes will retry normally.
+                return []
+
             self._pending.add(key)
 
         thread = threading.Thread(
-            target=self._fetch, args=(game_title, key), daemon=True
+            target=self._fetch, args=(game_title, song_title, key), daemon=True
         )
         thread.start()
         return []
 
     # -- background thread work below; never called from the main loop --
 
-    def _fetch(self, game_title, key):
+    def _fetch(self, game_title, song_title, key):
         try:
-            images = self._fetch_images(game_title, key)
+            images = self._fetch_images(game_title, song_title, key)
+        except self._RateLimitedError:
+            # Don't cache this as "no art found" -- we got rate-limited,
+            # not a genuine empty result (see _RateLimitedError's
+            # docstring). Just drop the pending flag so a later poll
+            # retries for real, once get()'s backoff check lets a new
+            # attempt through again.
+            with self._lock:
+                self._pending.discard(key)
+            return
         except Exception as e:
             log(f"GameArt: lookup failed for '{game_title}': {e}")
             images = []
@@ -399,43 +777,111 @@ class GameArtProvider:
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as r:
             return json.loads(r.read().decode("utf-8", errors="ignore"))
 
-    def _fetch_images(self, game_title, key):
-        game_id = None
-        matched_name = None
+    class _AuthError(Exception):
+        """Raised internally when SteamGridDB rejects the API key --
+        lets _resolve_game_id() stop trying further variants
+        immediately instead of burning through the whole cascade with
+        the same request doomed to fail every time.
+        """
 
+    class _RateLimitedError(Exception):
+        """Raised internally on a 429 -- lets callers stop immediately
+        (further variants would just get rate-limited too) and, more
+        importantly, tells _fetch() not to cache this as a normal "no
+        match" failure: a rate limit says nothing about whether the
+        game actually has art on SteamGridDB, so treating it like a
+        real negative result would wrongly lock that title out of
+        retries for FAILED_TTL over something that had nothing to do
+        with the title itself.
+        """
+
+    def _handle_http_error(self, e, context):
+        """Given an HTTPError from any SteamGridDB call, either raise
+        the appropriate internal signal for the caller to propagate
+        (auth failure, rate limit) or just log it as an ordinary
+        per-request miss that the caller can treat as "no result,
+        try the next variant".
+        """
+        if e.code == 401:
+            log("GameArt: SteamGridDB rejected the API key (401) -- check Add-on Settings")
+            raise self._AuthError()
+        if e.code == 429:
+            retry_after = _parse_retry_after(e.headers.get("Retry-After") if e.headers else None)
+            with self._lock:
+                self._rate_limited_until = time.time() + retry_after
+            log(f"GameArt: SteamGridDB rate-limited (429) -- backing off {retry_after}s")
+            raise self._RateLimitedError()
+        log(f"GameArt: request failed for '{context}': HTTP {e.code}")
+
+    def _search_once(self, variant):
+        """Run a single autocomplete search and return (game_id,
+        matched_name), or (None, None) if this particular query had no
+        results. Raises _AuthError on a 401 or _RateLimitedError on a
+        429, both of which callers let propagate rather than catching
+        per-variant.
+        """
+        quoted = urllib.parse.quote(variant, safe="")
+        try:
+            search = self._api_get(f"/search/autocomplete/{quoted}")
+        except urllib.error.HTTPError as e:
+            self._handle_http_error(e, variant)
+            return None, None
+        except Exception as e:
+            log(f"GameArt: search request failed for '{variant}': {e}")
+            return None, None
+
+        candidates = search.get("data") or []
+        if not candidates:
+            return None, None
+
+        best = _best_candidate(candidates, variant)
+        return best.get("id"), best.get("name", variant)
+
+    def _resolve_game_id(self, game_title, song_title):
+        """Try every album-title-derived query first (see
+        _title_variants()); only if every single one of those comes up
+        empty, fall back to a query derived from the song title (see
+        _song_title_variants()) -- the album/compilation title is
+        still the more reliable signal on the (common) occasions it
+        does match something. Returns (game_id, matched_name, source)
+        where source is "album" or "song", or (None, None, None).
+        """
         for variant in _title_variants(game_title):
-            quoted = urllib.parse.quote(variant, safe="")
-            try:
-                search = self._api_get(f"/search/autocomplete/{quoted}")
-            except urllib.error.HTTPError as e:
-                if e.code == 401:
-                    log("GameArt: SteamGridDB rejected the API key (401) -- check Add-on Settings")
-                    return []
-                log(f"GameArt: search request failed for '{variant}': HTTP {e.code}")
-                continue
-            except Exception as e:
-                log(f"GameArt: search request failed for '{variant}': {e}")
-                continue
-
-            candidates = search.get("data") or []
-            if not candidates:
-                continue
-
-            best = _best_candidate(candidates, variant)
-            game_id = best.get("id")
-            matched_name = best.get("name", variant)
+            game_id, matched_name = self._search_once(variant)
             if game_id:
                 if variant != game_title:
                     log(
                         f"GameArt: '{game_title}' had no exact match, "
                         f"fell back to '{matched_name}' via query '{variant}'"
                     )
-                break
+                return game_id, matched_name, "album"
+
+        for variant in _song_title_variants(song_title):
+            game_id, matched_name = self._search_once(variant)
+            if game_id:
+                log(
+                    f"GameArt: '{game_title}' had no album-based match, "
+                    f"fell back to song-title hint '{matched_name}' via query '{variant}'"
+                )
+                return game_id, matched_name, "song"
+
+        return None, None, None
+
+    def _fetch_images(self, game_title, song_title, key):
+        try:
+            game_id, matched_name, _source = self._resolve_game_id(game_title, song_title)
+        except self._AuthError:
+            return []
+        # _RateLimitedError deliberately NOT caught here -- it needs
+        # to propagate up to _fetch(), which handles it by skipping
+        # the cache write entirely rather than recording a false "no
+        # match" (see _RateLimitedError's docstring).
 
         if not game_id:
+            tried = len(_title_variants(game_title)) + len(_song_title_variants(song_title))
             xbmc.log(
                 f"[Rainwave] GameArt: no SteamGridDB match for '{game_title}' "
-                f"(tried {len(_title_variants(game_title))} query variants)",
+                f"(tried {tried} query variant(s), including song-title fallback)",
                 xbmc.LOGDEBUG,
             )
             return []
@@ -445,6 +891,9 @@ class GameArtProvider:
                 f"/heroes/game/{game_id}",
                 {"dimensions": HERO_DIMENSIONS, "types": "static"},
             )
+        except urllib.error.HTTPError as e:
+            self._handle_http_error(e, matched_name)
+            return []
         except Exception as e:
             log(f"GameArt: heroes request failed for '{matched_name}': {e}")
             return []

@@ -130,6 +130,18 @@
                 <label></label>
             </control>
 
+            <!-- Everything below is the real now-playing content:
+                 hidden for as long as service.py hasn't yet caught
+                 the display up with the actual (still-buffering)
+                 audio, in favor of the "Tuning in..." placeholder
+                 further down. See Rainwave.Buffering in
+                 service.py/sync_queue.py: without this, tuning in
+                 just looks like the widget failed to load for the
+                 first ~15-20 seconds, rather than looking like it's
+                 deliberately waiting for something. -->
+            <control type="group">
+                <visible>!String.IsEqual(Window(10000).Property(Rainwave.Buffering),true)</visible>
+
             <!-- album art -->
             <control type="image">
                 <posx>42</posx>
@@ -241,6 +253,84 @@
                 <textcolor>FFCCCCCC</textcolor>
                 <align>right</align>
                 <label>0:00 / 0:00</label>
+            </control>
+
+            </control>
+
+            <!-- buffering placeholder: see the comment above where
+                 the content group opens. Centered in the same card
+                 area the real content occupies.
+
+                 font18 is actually a 120pt bold font (see Font.xml),
+                 the same one used for the "Now playing" header above,
+                 so the label height here is generous on purpose to
+                 give it room; a tight height would just clip the
+                 text rather than shrink it, since Kodi doesn't
+                 auto-scale font size to fit a control. -->
+            <control type="group">
+                <visible>String.IsEqual(Window(10000).Property(Rainwave.Buffering),true)</visible>
+
+                <!-- spinning "in progress" indicator. Two attempts at
+                     a native Kodi <animation effect="rotate"> both
+                     failed to render at all, so rather than guess a
+                     third time at syntax I can't actually test, this
+                     instead reuses the one animation technique
+                     already proven to work throughout this addon
+                     (the slideshow crossfade, the up-next/previous
+                     panel): drive it from Python instead. service.py
+                     cycles Rainwave.SpinnerFrame through 12
+                     pre-rotated frames (resources/media/spinner_00.png
+                     .. spinner_11.png) once every tick while
+                     Rainwave.Buffering is set, and this control just
+                     displays whichever one is current, the same
+                     $INFO-bound-to-a-Python-set-property pattern the
+                     album art and background images already use. -->
+                <control type="image">
+                    <posx>651</posx>
+                    <posy>40</posy>
+                    <width>48</width>
+                    <height>48</height>
+                    <texture>$INFO[Window(10000).Property(Rainwave.SpinnerFrame)]</texture>
+                </control>
+
+                <control type="label">
+                    <posx>0</posx>
+                    <posy>100</posy>
+                    <width>1350</width>
+                    <height>60</height>
+                    <font>font18</font>
+                    <textcolor>FFFFC800</textcolor>
+                    <align>center</align>
+                    <aligny>center</aligny>
+                    <label>[B]Tuning in...[/B]</label>
+                </control>
+
+                <!-- underline: a plain color bar rather than an
+                     underscore string of text, the same technique
+                     as the "up next / previously played" divider
+                     further down this file. A text-based line at
+                     font18's size rendered far wider than its box and
+                     got ellipsis-truncated; a fixed-width image bar
+                     doesn't have that problem and is easy to size and
+                     position precisely right under the label above. -->
+                <control type="image">
+                    <posx>575</posx>
+                    <posy>158</posy>
+                    <width>200</width>
+                    <height>3</height>
+                    <texture colordiffuse="FFFFC800">white.png</texture>
+                </control>
+
+                <control type="label">
+                    <posx>0</posx>
+                    <posy>184</posy>
+                    <width>1350</width>
+                    <height>24</height>
+                    <font>font10</font>
+                    <textcolor>FFCCCCCC</textcolor>
+                    <align>center</align>
+                    <label>Syncing the display with the stream</label>
+                </control>
             </control>
 
         </control>

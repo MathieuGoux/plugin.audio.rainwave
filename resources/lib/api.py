@@ -183,3 +183,32 @@ class RainwaveAPI:
 
         result.update(timing)
         return result
+
+    def get_history(self, sid=None):
+        """Every recently-played song sched_history has for this
+        station (played most-recently-first), not just the single
+        most recent one get_now_playing() exposes as "previous".
+
+        Rainwave's separate playback_history endpoint can return up
+        to the last 100 songs, but requires a logged-in user's own
+        account ID and API key -- this addon only ever plays
+        anonymously (see tune_in()'s comment), so it doesn't have
+        those to send. sched_history is already included in the same
+        plain, keyless info() call get_now_playing() uses, so this
+        reuses that instead: fewer entries (five, in the samples this
+        was checked against), but zero extra setup for the user.
+        """
+        sid = sid or self.current_sid
+        info = self.get_station_info(sid)
+        if not info:
+            return []
+
+        entries = []
+        for event in info.get("sched_history", []):
+            songs = event.get("songs", [])
+            if not songs:
+                continue
+            entry = self._parse_song(songs[0])
+            entry["played_at"] = event.get("start_actual")
+            entries.append(entry)
+        return entries

@@ -1,8 +1,10 @@
+import os
 import time
 
 import xbmc
 import xbmcaddon
 import xbmcgui
+import xbmcvfs
 
 from resources.lib.api import RainwaveAPI
 from resources.lib.widget import Widget
@@ -13,8 +15,20 @@ from resources.lib.sync_queue import SyncQueue
 from resources.lib.utils import log
 
 POLL_INTERVAL = 5  # seconds, Rainwave "now playing" refresh
-TICK = 1  # seconds, main loop granularity (drives the slideshow clock)
+# Main loop granularity. Used to be 1s, which was fine for everything
+# else here (slideshow rotation, sync-queue polling) since all of that
+# is gated by its own "has enough real time elapsed" checks rather
+# than by how often the loop happens to run -- calling them 10x more
+# often costs nothing, they just no-op in between. It's too coarse for
+# the buffering spinner below though: cycling through 12 frames at 1
+# per second would take 12 whole seconds for one rotation, unusably
+# slow for something meant to read as continuous motion.
+TICK = 0.1  # seconds
 STREAM_HOST = "relay.rainwave.cc"
+
+# Frame files: resources/media/spinner_00.png .. spinner_{N-1:02d}.png
+SPINNER_FRAME_COUNT = 12
+SPINNER_FRAME_INTERVAL = 0.1  # seconds per frame -> ~1.2s per full spin
 
 
 class RainwavePlayerMonitor(xbmc.Player):
@@ -30,12 +44,13 @@ class RainwavePlayerMonitor(xbmc.Player):
     what we read here to know which sid to poll.
     """
 
-    def __init__(self, widget, dialog, sync_queue, slideshow):
+    def __init__(self, widget, dialog, sync_queue, slideshow, spinner_dir):
         super().__init__()
         self.widget = widget
         self.dialog = dialog
         self.sync_queue = sync_queue
         self.slideshow = slideshow
+        self.spinner_dir = spinner_dir
         self.active = False
         self.home = xbmcgui.Window(10000)
         self._not_playing_streak = 0
@@ -96,6 +111,17 @@ class RainwavePlayerMonitor(xbmc.Player):
         # previous session so its first display isn't held back
         # waiting on stale data (see SyncQueue.reset()).
         self.sync_queue.reset()
+        # The sync queue deliberately withholds the very first song
+        # until it's caught up with the actual (buffered) audio --
+        # see sync_queue.py -- which without this would just look like
+        # the widget failed to load for ~15-20s. The skin shows a
+        # "Tuning in..." placeholder for as long as this stays "true";
+        # _pump_sync() below clears it the moment there's something
+        # real to show instead.
+        self.home.setProperty("Rainwave.Buffering", "true")
+        self.home.setProperty(
+            "Rainwave.SpinnerFrame", os.path.join(self.spinner_dir, "spinner_00.png")
+        )
         now = time.time()
         song = self.widget.refresh(self._current_sid())
         self.sync_queue.push(song, now)
@@ -117,6 +143,7 @@ class RainwavePlayerMonitor(xbmc.Player):
         song = self.sync_queue.poll(now)
         if song is None:
             return
+        self.home.clearProperty("Rainwave.Buffering")
         self.widget.apply_current(song)
         self._apply_timing(song)
         self._update_player_info(song)
@@ -124,7 +151,10 @@ class RainwavePlayerMonitor(xbmc.Player):
         # this is what keeps the background changing to match the
         # game whose audio is actually playing, not whichever game
         # the API most recently reported (see slideshow.py/game_art.py).
-        self.slideshow.set_current_game(song.get("album"))
+        # The song title is passed too, only actually used as a
+        # fallback search signal if the album title alone can't find
+        # a match -- see game_art.py's _resolve_game_id().
+        self.slideshow.set_current_game(song.get("album"), song.get("title"))
 
     def onAVStarted(self):
         self._check_active_state()
@@ -241,6 +271,7 @@ class RainwavePlayerMonitor(xbmc.Player):
             self.active = False
             self.dialog.hide_widget()
             self.widget.clear()
+            self.home.clearProperty("Rainwave.Buffering")
             self.sync_queue.reset()
             # Playback has actually stopped, so allow the screensaver
             # to kick in again (it was inhibited in router.py while
@@ -268,6 +299,18 @@ def run():
     home = xbmcgui.Window(10000)
     _reload_display_settings(home)
 
+    addon_path = xbmcvfs.translatePath(xbmcaddon.Addon().getAddonInfo("path"))
+    # Every $INFO-bound texture elsewhere in this addon (slideshow
+    # images, album art) is a full absolute path -- static references
+    # written directly in the skin XML (like the settings gear icon)
+    # get resolved against the skin's own media folder automatically,
+    # but that resolution isn't guaranteed for a bare filename handed
+    # to $INFO[Window(...).Property(...)] at runtime. Building the
+    # full path here up front, once, rather than a bare filename each
+    # tick, keeps this consistent with the pattern already proven to
+    # work.
+    spinner_dir = os.path.join(addon_path, "resources", "media")
+
     dialog = NowPlayingDialog(
         "script-rainwave-nowplaying.xml",
         xbmcaddon.Addon().getAddonInfo("path"),
@@ -275,7 +318,7 @@ def run():
         "1080i",
     )
 
-    player_monitor = RainwavePlayerMonitor(widget, dialog, sync_queue, slideshow)
+    player_monitor = RainwavePlayerMonitor(widget, dialog, sync_queue, slideshow, spinner_dir)
 
     class SettingsMonitor(xbmc.Monitor):
         """Reloads settings-driven state whenever the user changes it,
@@ -290,6 +333,8 @@ def run():
 
     kodi_monitor = SettingsMonitor()
     last_refresh = 0.0
+    last_spinner_frame = 0.0
+    spinner_index = 0
 
     log("Service started")
 
@@ -312,6 +357,22 @@ def run():
             player_monitor._pump_sync(now)
             widget.tick(now)
             slideshow.tick(now)
+
+            # Buffering placeholder's spinner (see
+            # script-rainwave-nowplaying.xml) -- gated on its own
+            # SPINNER_FRAME_INTERVAL timer rather than firing every
+            # TICK directly, so the animation speed doesn't change if
+            # TICK is ever tuned for other reasons. Only bothers
+            # advancing while the placeholder is actually visible;
+            # harmless either way since the control is hidden the
+            # rest of the time, but no reason to keep writing a
+            # property nobody's looking at.
+            if home.getProperty("Rainwave.Buffering") == "true":
+                if now - last_spinner_frame >= SPINNER_FRAME_INTERVAL:
+                    spinner_index = (spinner_index + 1) % SPINNER_FRAME_COUNT
+                    frame_path = os.path.join(spinner_dir, f"spinner_{spinner_index:02d}.png")
+                    home.setProperty("Rainwave.SpinnerFrame", frame_path)
+                    last_spinner_frame = now
 
         if kodi_monitor.waitForAbort(TICK):
             break
