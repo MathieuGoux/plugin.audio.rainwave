@@ -79,7 +79,12 @@ CACHE_SUBDIR = "art_cache"
 #      than at either end -- can newly resolve titles that failed
 #      outright, or previously relied on a much weaker/later variant
 #      to accidentally reach the same answer.
-CACHE_SCHEMA_VERSION = 8
+#   9: added a general "[Style word] [Version-like noun]" suffix
+#      pattern (e.g. "Okami Jazz Version" -> "Okami") -- previously
+#      MIN_TRUNCATED_WORDS blocked blind truncation from ever
+#      reaching a legitimate single-word game name in cases like this,
+#      since the style word wasn't in the fixed _STRIP_SUFFIXES list.
+CACHE_SCHEMA_VERSION = 9
 
 # How long to remember "no match / no art found for this title" before
 # letting a future lookup try again. Long enough that a title with no
@@ -91,7 +96,25 @@ FAILED_TTL = 7 * 24 * 60 * 60  # 7 days
 # How many hero images to keep per game, when SteamGridDB has several
 # -- lets the slideshow rotate between a few pieces of art for a game
 # that's airing several songs in a row, instead of one static image.
+# Overridden per-instance by the "Background images per game" setting
+# (see IMAGES_PER_GAME_OPTIONS below); this is just the fallback used
+# if that setting is ever missing/out of range.
 MAX_IMAGES_PER_GAME = 4
+
+# Index -> actual value for the "Background images per game" enum
+# setting (values="1|2|3|4|All"). None means "no client-side cap" --
+# whatever SteamGridDB's own /heroes endpoint returns for that game,
+# which in practice tops out somewhere in the dozens even for very
+# popular games, not literally unbounded.
+IMAGES_PER_GAME_OPTIONS = [1, 2, 3, 4, None]
+
+# Below this many images, the matched game alone isn't considered to
+# have "enough" art -- see _fill_from_series_siblings() -- and it's
+# worth spending a couple of extra API calls trying to round it out
+# with art from the rest of its series, if it looks like it has one.
+MIN_IMAGES_BEFORE_SERIES_LOOKUP = 2
+MAX_SERIES_SIBLINGS = 3
+MAX_IMAGES_PER_SIBLING = 2
 
 # How often get()'s cache-hit path is allowed to write last_used_at
 # changes to disk. get() runs roughly once a second whenever auto mode
@@ -120,6 +143,25 @@ _STRIP_SUFFIXES = re.compile(
     r"Anniversary( Edition)?|Definitive( Edition)?|"
     r"Re[- ]?[Mm]ix(ed)?|[Mm]ix(ed)?"
     r")\s*$",
+    re.IGNORECASE,
+)
+
+# "[Style word] [Version-like noun]" -- e.g. "Jazz Version", "Piano
+# Arrangement", "Rock Cover", "Orchestral Suite" -- a shape rather
+# than a fixed word list (unlike _STRIP_SUFFIXES above), since the
+# style word varies too much to enumerate (jazz, piano, rock, chip,
+# 8-bit, orchestral, acoustic, symphonic, and so on indefinitely).
+# Without this, something like "Okami Jazz Version" never reduces
+# down to the actual game name at all: "Jazz Version" doesn't match
+# any of the specific words in _STRIP_SUFFIXES, and MIN_TRUNCATED_WORDS
+# below stops blind word-by-word truncation from ever reaching a
+# single-word result like "Okami" on its own, even though it's exactly
+# the right one here. Structured suffix stripping like this one isn't
+# subject to that floor -- it strips a whole recognized *unit* in one
+# step, not one word at a time -- so "Okami" still comes out the other
+# end correctly.
+_STYLE_SUFFIX = re.compile(
+    r"\s*[:\-]?\s*[A-Za-z]+\s+(Version|Arrangement|Cover|Suite|Medley|Rendition|Style|Take|Edit)\s*$",
     re.IGNORECASE,
 )
 
@@ -234,6 +276,47 @@ def _strip_subtitle(title):
     return None
 
 
+# Roman numerals covering the range real game sequels actually use in
+# practice (I-XX) -- an explicit list rather than a generative pattern
+# is easier to get right and to reason about here. Order doesn't
+# matter for correctness: _TRAILING_NUMBER anchors to the end of the
+# string, so a shorter alternative (e.g. "XI") can't win over the
+# correct longer one (e.g. "XIX") by leaving characters unconsumed
+# before that anchor.
+_ROMAN_NUMERALS = (
+    "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
+    "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX",
+)
+_TRAILING_NUMBER = re.compile(
+    rf"^(.*\S)\s+(?:\d{{1,2}}|{'|'.join(_ROMAN_NUMERALS)})\s*$"
+)
+
+
+def _series_base_name(name):
+    """Strip a trailing sequel number (arabic or roman numeral) or a
+    ": Subtitle"/". Subtitle" tail from a resolved game name, giving
+    the base series name to look for siblings under -- e.g. "Last
+    Bible III" -> "Last Bible", "Dragon Quest III: The Seeds of
+    Salvation" -> "Dragon Quest III" (via the subtitle stripper; a
+    second pass on that result would also strip the "III", but one
+    pass is enough for what this is used for -- see
+    _fill_from_series_siblings()). Returns None if nothing
+    recognizable to strip, meaning the name doesn't look like part of
+    a numbered/subtitled series in the first place.
+    """
+    subtitle_stripped = _strip_subtitle(name)
+    if subtitle_stripped and subtitle_stripped != name:
+        return subtitle_stripped
+
+    match = _TRAILING_NUMBER.match(name)
+    if match:
+        base = match.group(1).strip()
+        if base and base != name:
+            return base
+
+    return None
+
+
 def _extract_from_hint(title):
     """Pull a "(from Game)" / "(Game)" / bare "from Game" hint out of
     `title`, or None. See the comment above _BRACKETED_HINT.
@@ -290,6 +373,8 @@ def _title_variants(title):
     cleaned = title
     while True:
         stripped = _STRIP_SUFFIXES.sub("", cleaned).strip()
+        if stripped == cleaned:
+            stripped = _STYLE_SUFFIX.sub("", cleaned).strip()
         if stripped == cleaned:
             stripped = _DASH_WRAPPED_SUFFIX.sub("", cleaned).strip()
         if not stripped or stripped == cleaned:
@@ -528,17 +613,45 @@ class GameArtProvider:
         # a fresh session if the key is still missing then, but won't
         # repeat itself while Kodi keeps running.
         self._warned_no_key = False
+        self._settings_loaded = False
+        self._max_images_per_game = MAX_IMAGES_PER_GAME
         self.reload_settings()
 
     def reload_settings(self):
         addon = xbmcaddon.Addon()
-        self._api_key = addon.getSettingString("steamgriddb_api_key").strip()
-        self._cache_limit_mb = addon.getSettingInt("art_cache_limit_mb")
-        if self._api_key:
+        new_api_key = addon.getSettingString("steamgriddb_api_key").strip()
+        new_cache_limit_mb = addon.getSettingInt("art_cache_limit_mb")
+
+        # Doesn't need the relevant_changed/manifest-reload dance below
+        # -- it only affects future fetches, nothing already on disk,
+        # so there's no reason not to just always pick up the current
+        # value.
+        images_index = addon.getSettingInt("art_images_per_game")
+        self._max_images_per_game = (
+            IMAGES_PER_GAME_OPTIONS[images_index]
+            if 0 <= images_index < len(IMAGES_PER_GAME_OPTIONS)
+            else MAX_IMAGES_PER_GAME
+        )
+
+        relevant_changed = (
+            not self._settings_loaded
+            or new_api_key != self._api_key
+            or new_cache_limit_mb != self._cache_limit_mb
+        )
+
+        self._api_key = new_api_key
+        self._cache_limit_mb = new_cache_limit_mb
+        self._settings_loaded = True
+
+        if new_api_key:
             # A key was just added (or was already present) -- if it's
             # later removed again, the nudge is fair game to fire once
             # more.
             self._warned_no_key = False
+
+        if not relevant_changed:
+            return
+
         profile = xbmcvfs.translatePath(addon.getAddonInfo("profile"))
         self._cache_dir = os.path.join(profile, CACHE_SUBDIR)
         xbmcvfs.mkdirs(self._cache_dir)
@@ -837,35 +950,190 @@ class GameArtProvider:
         best = _best_candidate(candidates, variant)
         return best.get("id"), best.get("name", variant)
 
-    def _resolve_game_id(self, game_title, song_title):
-        """Try every album-title-derived query first (see
-        _title_variants()); only if every single one of those comes up
-        empty, fall back to a query derived from the song title (see
-        _song_title_variants()) -- the album/compilation title is
-        still the more reliable signal on the (common) occasions it
-        does match something. Returns (game_id, matched_name, source)
-        where source is "album" or "song", or (None, None, None).
+    def _first_match(self, variants):
+        """Try each query in `variants`, in order, and return
+        (game_id, matched_name, variant) for the first one that finds
+        anything -- or None if none of them do.
         """
-        for variant in _title_variants(game_title):
+        for variant in variants:
             game_id, matched_name = self._search_once(variant)
             if game_id:
-                if variant != game_title:
-                    log(
-                        f"GameArt: '{game_title}' had no exact match, "
-                        f"fell back to '{matched_name}' via query '{variant}'"
-                    )
-                return game_id, matched_name, "album"
+                return game_id, matched_name, variant
+        return None
 
-        for variant in _song_title_variants(song_title):
-            game_id, matched_name = self._search_once(variant)
-            if game_id:
+    def _resolve_game_id(self, game_title, song_title):
+        """Find a game_id via both the album-title cascade (see
+        _title_variants()) and the song-title cascade (see
+        _song_title_variants()), and pick between them if both
+        actually find something.
+
+        Earlier versions of this tried the album title exhaustively
+        and only even looked at the song title if the album cascade
+        found *nothing at all* -- which meant a technically-valid but
+        too-generic album match (e.g. a compilation album "Donkey Kong
+        & Friends" truncating down to just "Donkey Kong") would always
+        win over a much more specific song-title match (e.g. a song
+        called "Donkey Kong Country Aquatic Ambience Revisited"
+        resolving to "Donkey Kong Country") purely because it was
+        tried first, never even attempting the song title once the
+        album cascade already had *an* answer.
+
+        Now both are tried every time, and if both succeed, the one
+        whose winning query was more specific wins -- more words, or
+        failing that more characters. The intuition: a search that
+        needed less trimming/guessing to land on something is a
+        stronger, less coincidental signal than one that only matched
+        after being ground down to something short and generic. Ties
+        (including "only one of them found anything") default to the
+        album title, preserving its priority from before.
+
+        This does mean a full song-title attempt now happens even when
+        the album title alone would have been enough -- roughly
+        doubling the worst-case API calls for a single lookup. Given
+        how aggressively this is cached afterwards (a resolved game is
+        never looked up again), that's a one-time cost per distinct
+        game, not a recurring one, and was judged worth it for the
+        accuracy gain. Returns (game_id, matched_name, source) where
+        source is "album" or "song", or (None, None, None).
+        """
+        album_match = self._first_match(_title_variants(game_title))
+        song_match = self._first_match(_song_title_variants(song_title)) if song_title else None
+
+        if not album_match and not song_match:
+            return None, None, None
+
+        if album_match and not song_match:
+            game_id, matched_name, variant = album_match
+            if variant != game_title:
                 log(
-                    f"GameArt: '{game_title}' had no album-based match, "
-                    f"fell back to song-title hint '{matched_name}' via query '{variant}'"
+                    f"GameArt: '{game_title}' had no exact match, "
+                    f"fell back to '{matched_name}' via query '{variant}'"
                 )
-                return game_id, matched_name, "song"
+            return game_id, matched_name, "album"
 
-        return None, None, None
+        if song_match and not album_match:
+            game_id, matched_name, variant = song_match
+            log(
+                f"GameArt: '{game_title}' had no album-based match, "
+                f"fell back to song-title hint '{matched_name}' via query '{variant}'"
+            )
+            return game_id, matched_name, "song"
+
+        # Both found something -- more specific (words, then chars) wins.
+        def specificity(variant):
+            return (len(variant.split()), len(variant))
+
+        album_id, album_name, album_variant = album_match
+        song_id, song_name, song_variant = song_match
+
+        if specificity(song_variant) > specificity(album_variant):
+            log(
+                f"GameArt: '{game_title}' matched both album ('{album_name}' via "
+                f"'{album_variant}') and song title ('{song_name}' via '{song_variant}') "
+                f"-- song-title match is more specific, using it"
+            )
+            return song_id, song_name, "song"
+
+        return album_id, album_name, "album"
+
+    def _download_heroes(self, game_id, matched_name, key, images, limit):
+        """Fetch up to `limit` more hero images for `game_id` and
+        append their downloaded filenames onto `images` in place.
+        Returns how many were actually added. Shared by the primary
+        matched game and, when that alone doesn't yield enough images,
+        each of its series siblings (see _fill_from_series_siblings())
+        -- all writing into the same `images` list under the same
+        cache `key`, so they end up pooled together as one game's
+        worth of rotation material regardless of which SteamGridDB
+        entry each individual image actually came from.
+
+        HTTPErrors are handled the same way as everywhere else in this
+        class (see _handle_http_error()) -- notably, _AuthError/
+        _RateLimitedError are allowed to propagate rather than being
+        caught here, since the caller (ultimately _fetch()) needs to
+        see those to avoid caching a false "no match".
+        """
+        if limit is not None and limit <= 0:
+            return 0
+
+        try:
+            heroes = self._api_get(
+                f"/heroes/game/{game_id}",
+                {"dimensions": HERO_DIMENSIONS, "types": "static"},
+            )
+        except urllib.error.HTTPError as e:
+            self._handle_http_error(e, matched_name)
+            return 0
+        except Exception as e:
+            log(f"GameArt: heroes request failed for '{matched_name}': {e}")
+            return 0
+
+        entries = (heroes.get("data") or [])[:limit]
+        added = 0
+        for entry in entries:
+            image_url = entry.get("url")
+            if not image_url:
+                continue
+            ext = os.path.splitext(urllib.parse.urlparse(image_url).path)[1] or ".jpg"
+            filename = f"{key}-{len(images)}{ext}"
+            if self._download(image_url, filename):
+                images.append(filename)
+                added += 1
+        return added
+
+    def _fill_from_series_siblings(self, primary_game_id, matched_name, key, images):
+        """When the matched game alone doesn't have enough hero art
+        (see MIN_IMAGES_BEFORE_SERIES_LOOKUP), look for other games in
+        the same numbered/subtitled series and borrow a couple of
+        images from each -- e.g. "Last Bible III" turning up only one
+        image is a good occasion to also try "Last Bible", "Last
+        Bible II", etc., in case SteamGridDB's own search for the bare
+        series name (see _series_base_name()) turns any of them up.
+
+        A no-op if the matched name doesn't look like part of a
+        numbered/subtitled series at all, or if the series-name search
+        itself comes up empty -- this is a bonus on top of an already-
+        successful match, not something worth failing over.
+        """
+        base_name = _series_base_name(matched_name)
+        if not base_name:
+            return
+
+        quoted = urllib.parse.quote(base_name, safe="")
+        try:
+            search = self._api_get(f"/search/autocomplete/{quoted}")
+        except urllib.error.HTTPError as e:
+            self._handle_http_error(e, base_name)
+            return
+        except Exception as e:
+            log(f"GameArt: series search failed for '{base_name}': {e}")
+            return
+
+        candidates = search.get("data") or []
+        siblings = [
+            c for c in candidates
+            if c.get("id") != primary_game_id
+            and c.get("name", "").lower().startswith(base_name.lower())
+        ][:MAX_SERIES_SIBLINGS]
+
+        if not siblings:
+            return
+
+        log(
+            f"GameArt: '{matched_name}' only had {len(images)} image(s), "
+            f"trying {len(siblings)} series sibling(s) of '{base_name}'"
+        )
+
+        for sibling in siblings:
+            if self._max_images_per_game is not None and len(images) >= self._max_images_per_game:
+                break
+            sibling_id = sibling.get("id")
+            if not sibling_id:
+                continue
+            remaining = MAX_IMAGES_PER_SIBLING
+            if self._max_images_per_game is not None:
+                remaining = min(remaining, self._max_images_per_game - len(images))
+            self._download_heroes(sibling_id, sibling.get("name", base_name), key, images, remaining)
 
     def _fetch_images(self, game_title, song_title, key):
         try:
@@ -886,28 +1154,11 @@ class GameArtProvider:
             )
             return []
 
-        try:
-            heroes = self._api_get(
-                f"/heroes/game/{game_id}",
-                {"dimensions": HERO_DIMENSIONS, "types": "static"},
-            )
-        except urllib.error.HTTPError as e:
-            self._handle_http_error(e, matched_name)
-            return []
-        except Exception as e:
-            log(f"GameArt: heroes request failed for '{matched_name}': {e}")
-            return []
-
-        entries = (heroes.get("data") or [])[:MAX_IMAGES_PER_GAME]
         images = []
-        for i, entry in enumerate(entries):
-            image_url = entry.get("url")
-            if not image_url:
-                continue
-            ext = os.path.splitext(urllib.parse.urlparse(image_url).path)[1] or ".jpg"
-            filename = f"{key}-{i}{ext}"
-            if self._download(image_url, filename):
-                images.append(filename)
+        self._download_heroes(game_id, matched_name, key, images, self._max_images_per_game)
+
+        if len(images) < MIN_IMAGES_BEFORE_SERIES_LOOKUP:
+            self._fill_from_series_siblings(game_id, matched_name, key, images)
 
         return images
 

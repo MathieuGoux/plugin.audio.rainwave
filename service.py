@@ -275,8 +275,12 @@ class RainwavePlayerMonitor(xbmc.Player):
             self.sync_queue.reset()
             # Playback has actually stopped, so allow the screensaver
             # to kick in again (it was inhibited in router.py while
-            # a Rainwave stream was playing).
-            xbmc.executebuiltin('InhibitScreensaver(false)')
+            # a Rainwave stream was playing, unless the user's turned
+            # that off -- checking the same setting here too, though
+            # un-inhibiting when nothing was inhibited to begin with
+            # is harmless either way).
+            if xbmcaddon.Addon().getSettingBool("inhibit_screensaver"):
+                xbmc.executebuiltin('InhibitScreensaver(false)')
 
 
 def _reload_display_settings(home):
@@ -377,7 +381,7 @@ def run():
         if kodi_monitor.waitForAbort(TICK):
             break
 
-    if player_monitor.active:
+    if player_monitor.active and xbmcaddon.Addon().getSettingBool("inhibit_screensaver"):
         xbmc.executebuiltin('InhibitScreensaver(false)')
     dialog.hide_widget()
     log("Service stopped")

@@ -72,29 +72,56 @@ class Slideshow:
         self.interval = 8
         self.enabled = False
         self.source = SOURCE_LOCAL
+        self._path = None
         self.active_slot = "A"
         self.next_change = 0
         self.preloaded = False
         self._current_game = None
         self._current_song_title = None
+        self._settings_loaded = False
         self.reload_settings()
 
     def reload_settings(self):
         addon = xbmcaddon.Addon()
-        self.enabled = addon.getSettingBool("slideshow_enabled")
-        self.source = addon.getSettingInt("slideshow_source")
-        path = addon.getSettingString("slideshow_path")
+        new_enabled = addon.getSettingBool("slideshow_enabled")
+        new_source = addon.getSettingInt("slideshow_source")
+        new_path = addon.getSettingString("slideshow_path")
         self.interval = max(2, addon.getSettingInt("slideshow_time"))
 
         if self.game_art:
             self.game_art.reload_settings()
 
-        active = self.enabled and (self.source == SOURCE_AUTO or path)
+        # reload_settings() runs on *every* addon settings change --
+        # including ones with nothing to do with the slideshow, like
+        # the stream sync offset -- so this only resets in-progress
+        # state (current game, fetched art, rotation position) when
+        # something that actually affects the slideshow changed.
+        # Without this guard, changing an unrelated setting mid-song
+        # would wipe the currently-displayed game art and fall back
+        # to the local folder (or a blank screen) until the next real
+        # song change happened to call set_current_game() again and
+        # re-establish it.
+        relevant_changed = (
+            not self._settings_loaded
+            or new_enabled != self.enabled
+            or new_source != self.source
+            or new_path != self._path
+        )
+
+        self.enabled = new_enabled
+        self.source = new_source
+        self._path = new_path
+        self._settings_loaded = True
+
+        if not relevant_changed:
+            return
+
+        active = self.enabled and (self.source == SOURCE_AUTO or new_path)
         if active:
             # Only used by the skin as a "something to show" flag (see
             # script-rainwave-nowplaying.xml) -- any non-empty value
             # works, the actual per-source lookup happens below.
-            self.home.setProperty(self.PATH_PROP, path if self.source == SOURCE_LOCAL else "auto")
+            self.home.setProperty(self.PATH_PROP, new_path if self.source == SOURCE_LOCAL else "auto")
         else:
             self.home.clearProperty(self.PATH_PROP)
             self.home.clearProperty(self.ACTIVE_PROP)
@@ -103,8 +130,8 @@ class Slideshow:
 
         self.files = []
         self.fallback_files = []
-        if self.enabled and path:
-            self._scan_local(path)
+        if self.enabled and new_path:
+            self._scan_local(new_path)
             self.fallback_files = list(self.files)
         if not (self.enabled and self.source == SOURCE_LOCAL):
             self.files = []

@@ -1,6 +1,6 @@
 import sys
 from urllib.parse import parse_qs
-import xbmc, xbmcplugin, xbmcgui
+import xbmc, xbmcaddon, xbmcplugin, xbmcgui
 
 
 from .stations import StationMenu
@@ -119,9 +119,12 @@ class Router:
 
             xbmcplugin.setResolvedUrl(self.handle, True, listitem)
 
-            # Inhibit Screensaver on play, so the widget is always shown
+            # Inhibit screensaver on play, so the widget is always
+            # shown -- unless the user's turned that off in settings
+            # (default on, matching the addon's original behavior).
 
-            xbmc.executebuiltin('InhibitScreensaver(true)')
+            if xbmcaddon.Addon().getSettingBool("inhibit_screensaver"):
+                xbmc.executebuiltin('InhibitScreensaver(true)')
 
             # The now-playing widget itself is shown/hidden by service.py,
             # which watches actual playback state via xbmc.Player callbacks.

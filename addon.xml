@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<addon id="plugin.audio.rainwave" name="Rainwave" version="3.0.1" provider-name="MG">
+<addon id="plugin.audio.rainwave" name="Rainwave" version="2.16.0" provider-name="MG">
     <requires>
         <import addon="xbmc.python" version="3.0.1"/>
     </requires>
