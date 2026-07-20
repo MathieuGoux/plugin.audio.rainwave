@@ -96,17 +96,7 @@ FAILED_TTL = 7 * 24 * 60 * 60  # 7 days
 # How many hero images to keep per game, when SteamGridDB has several
 # -- lets the slideshow rotate between a few pieces of art for a game
 # that's airing several songs in a row, instead of one static image.
-# Overridden per-instance by the "Background images per game" setting
-# (see IMAGES_PER_GAME_OPTIONS below); this is just the fallback used
-# if that setting is ever missing/out of range.
 MAX_IMAGES_PER_GAME = 4
-
-# Index -> actual value for the "Background images per game" enum
-# setting (values="1|2|3|4|All"). None means "no client-side cap" --
-# whatever SteamGridDB's own /heroes endpoint returns for that game,
-# which in practice tops out somewhere in the dozens even for very
-# popular games, not literally unbounded.
-IMAGES_PER_GAME_OPTIONS = [1, 2, 3, 4, None]
 
 # Below this many images, the matched game alone isn't considered to
 # have "enough" art -- see _fill_from_series_siblings() -- and it's
@@ -614,24 +604,12 @@ class GameArtProvider:
         # repeat itself while Kodi keeps running.
         self._warned_no_key = False
         self._settings_loaded = False
-        self._max_images_per_game = MAX_IMAGES_PER_GAME
         self.reload_settings()
 
     def reload_settings(self):
         addon = xbmcaddon.Addon()
         new_api_key = addon.getSettingString("steamgriddb_api_key").strip()
         new_cache_limit_mb = addon.getSettingInt("art_cache_limit_mb")
-
-        # Doesn't need the relevant_changed/manifest-reload dance below
-        # -- it only affects future fetches, nothing already on disk,
-        # so there's no reason not to just always pick up the current
-        # value.
-        images_index = addon.getSettingInt("art_images_per_game")
-        self._max_images_per_game = (
-            IMAGES_PER_GAME_OPTIONS[images_index]
-            if 0 <= images_index < len(IMAGES_PER_GAME_OPTIONS)
-            else MAX_IMAGES_PER_GAME
-        )
 
         relevant_changed = (
             not self._settings_loaded
@@ -950,91 +928,35 @@ class GameArtProvider:
         best = _best_candidate(candidates, variant)
         return best.get("id"), best.get("name", variant)
 
-    def _first_match(self, variants):
-        """Try each query in `variants`, in order, and return
-        (game_id, matched_name, variant) for the first one that finds
-        anything -- or None if none of them do.
+    def _resolve_game_id(self, game_title, song_title):
+        """Try every album-title-derived query first (see
+        _title_variants()); only if every single one of those comes up
+        empty, fall back to a query derived from the song title (see
+        _song_title_variants()) -- the album/compilation title is
+        still the more reliable signal on the (common) occasions it
+        does match something. Returns (game_id, matched_name, source)
+        where source is "album" or "song", or (None, None, None).
         """
-        for variant in variants:
+        for variant in _title_variants(game_title):
             game_id, matched_name = self._search_once(variant)
             if game_id:
-                return game_id, matched_name, variant
-        return None
+                if variant != game_title:
+                    log(
+                        f"GameArt: '{game_title}' had no exact match, "
+                        f"fell back to '{matched_name}' via query '{variant}'"
+                    )
+                return game_id, matched_name, "album"
 
-    def _resolve_game_id(self, game_title, song_title):
-        """Find a game_id via both the album-title cascade (see
-        _title_variants()) and the song-title cascade (see
-        _song_title_variants()), and pick between them if both
-        actually find something.
-
-        Earlier versions of this tried the album title exhaustively
-        and only even looked at the song title if the album cascade
-        found *nothing at all* -- which meant a technically-valid but
-        too-generic album match (e.g. a compilation album "Donkey Kong
-        & Friends" truncating down to just "Donkey Kong") would always
-        win over a much more specific song-title match (e.g. a song
-        called "Donkey Kong Country Aquatic Ambience Revisited"
-        resolving to "Donkey Kong Country") purely because it was
-        tried first, never even attempting the song title once the
-        album cascade already had *an* answer.
-
-        Now both are tried every time, and if both succeed, the one
-        whose winning query was more specific wins -- more words, or
-        failing that more characters. The intuition: a search that
-        needed less trimming/guessing to land on something is a
-        stronger, less coincidental signal than one that only matched
-        after being ground down to something short and generic. Ties
-        (including "only one of them found anything") default to the
-        album title, preserving its priority from before.
-
-        This does mean a full song-title attempt now happens even when
-        the album title alone would have been enough -- roughly
-        doubling the worst-case API calls for a single lookup. Given
-        how aggressively this is cached afterwards (a resolved game is
-        never looked up again), that's a one-time cost per distinct
-        game, not a recurring one, and was judged worth it for the
-        accuracy gain. Returns (game_id, matched_name, source) where
-        source is "album" or "song", or (None, None, None).
-        """
-        album_match = self._first_match(_title_variants(game_title))
-        song_match = self._first_match(_song_title_variants(song_title)) if song_title else None
-
-        if not album_match and not song_match:
-            return None, None, None
-
-        if album_match and not song_match:
-            game_id, matched_name, variant = album_match
-            if variant != game_title:
+        for variant in _song_title_variants(song_title):
+            game_id, matched_name = self._search_once(variant)
+            if game_id:
                 log(
-                    f"GameArt: '{game_title}' had no exact match, "
-                    f"fell back to '{matched_name}' via query '{variant}'"
+                    f"GameArt: '{game_title}' had no album-based match, "
+                    f"fell back to song-title hint '{matched_name}' via query '{variant}'"
                 )
-            return game_id, matched_name, "album"
+                return game_id, matched_name, "song"
 
-        if song_match and not album_match:
-            game_id, matched_name, variant = song_match
-            log(
-                f"GameArt: '{game_title}' had no album-based match, "
-                f"fell back to song-title hint '{matched_name}' via query '{variant}'"
-            )
-            return game_id, matched_name, "song"
-
-        # Both found something -- more specific (words, then chars) wins.
-        def specificity(variant):
-            return (len(variant.split()), len(variant))
-
-        album_id, album_name, album_variant = album_match
-        song_id, song_name, song_variant = song_match
-
-        if specificity(song_variant) > specificity(album_variant):
-            log(
-                f"GameArt: '{game_title}' matched both album ('{album_name}' via "
-                f"'{album_variant}') and song title ('{song_name}' via '{song_variant}') "
-                f"-- song-title match is more specific, using it"
-            )
-            return song_id, song_name, "song"
-
-        return album_id, album_name, "album"
+        return None, None, None
 
     def _download_heroes(self, game_id, matched_name, key, images, limit):
         """Fetch up to `limit` more hero images for `game_id` and
@@ -1053,7 +975,7 @@ class GameArtProvider:
         caught here, since the caller (ultimately _fetch()) needs to
         see those to avoid caching a false "no match".
         """
-        if limit is not None and limit <= 0:
+        if limit <= 0:
             return 0
 
         try:
@@ -1125,14 +1047,12 @@ class GameArtProvider:
         )
 
         for sibling in siblings:
-            if self._max_images_per_game is not None and len(images) >= self._max_images_per_game:
+            if len(images) >= MAX_IMAGES_PER_GAME:
                 break
             sibling_id = sibling.get("id")
             if not sibling_id:
                 continue
-            remaining = MAX_IMAGES_PER_SIBLING
-            if self._max_images_per_game is not None:
-                remaining = min(remaining, self._max_images_per_game - len(images))
+            remaining = min(MAX_IMAGES_PER_SIBLING, MAX_IMAGES_PER_GAME - len(images))
             self._download_heroes(sibling_id, sibling.get("name", base_name), key, images, remaining)
 
     def _fetch_images(self, game_title, song_title, key):
@@ -1155,7 +1075,7 @@ class GameArtProvider:
             return []
 
         images = []
-        self._download_heroes(game_id, matched_name, key, images, self._max_images_per_game)
+        self._download_heroes(game_id, matched_name, key, images, MAX_IMAGES_PER_GAME)
 
         if len(images) < MIN_IMAGES_BEFORE_SERIES_LOOKUP:
             self._fill_from_series_siblings(game_id, matched_name, key, images)

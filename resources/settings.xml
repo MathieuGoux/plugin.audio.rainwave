@@ -39,25 +39,19 @@
                  help="Free -- generate one at steamgriddb.com/profile/preferences/api after creating an account. Required for automatic background art; nothing is fetched without it."
                  default=""
                  visible="eq(-3,true) + eq(-2,1)"/>
-        <setting id="art_images_per_game" type="enum"
-                 label="Background images per game"
-                 help="How many pieces of art to fetch and rotate through for each game. Higher gives more variety for long songs or games that air often; 'All' fetches everything SteamGridDB has for that game."
-                 values="1|2|3|4|All"
-                 default="3"
-                 visible="eq(-4,true) + eq(-3,1)"/>
         <setting id="art_cache_limit_mb" type="slider"
                  label="Art cache size limit (MB)"
                  help="Fetched game art is kept permanently so it doesn't need re-downloading -- once this limit is reached, the least recently shown games' art is deleted first to make room. 0 = unlimited."
                  default="500" range="0,50,5000" option="int"
-                 visible="eq(-5,true) + eq(-4,1)"/>
+                 visible="eq(-4,true) + eq(-3,1)"/>
         <setting id="clear_art_cache" type="action"
                  label="Clear art cache"
                  help="Deletes every downloaded background image and starts fresh. Asks for confirmation first."
                  action="RunPlugin(plugin://plugin.audio.rainwave/?action=clear_art_cache)"
-                 visible="eq(-6,true) + eq(-5,1)"/>
+                 visible="eq(-5,true) + eq(-4,1)"/>
         <setting id="slideshow_time" type="slider"
                  label="Seconds per image"
                  default="8" range="2,1,60" option="int"
-                 visible="eq(-7,true)"/>
+                 visible="eq(-6,true)"/>
     </category>
 </settings>

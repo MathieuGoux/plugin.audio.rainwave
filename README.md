@@ -3,7 +3,7 @@ A simple Kodi addon for Rainwave Internet Radio.
 
 ------------------------------
 
-Version 2.16
+Version 2.15
 
 An addon for Kodi based on the [Rainwave Api](https://rainwave.cc/api4/) for playing the different stations (All, Overclocked Remixes, Chiptunes etc.) and displaying a dialog box akin to the [Twitch Widget](https://rainwave.cc/twitch) for the current, previously played and next songs.
 
@@ -19,9 +19,8 @@ Some pointers:
 
     * Fetching mode is a fuzzy search: if there is no exact match, the script erases the last words of the album title, then the first words of the album title, then look into the song title... until something clicks.
     * If there is only one artwork available, logic will try to fetch heroes from the same series by looking at the same title with different numbers or subtitles.
-    * If there is two competitive matches (like "Donkey Kong" vs. "Donkey Kong Country", the longer one is preferred) Otherwise, it loops back to the local folder solution. 
+    * If nothing works, background loops back to the local folder solution. 
     * Artworks are locally stored in the `userdata/addon_data/plugin.audio.rainwave/art_cache` folder. You can set a limit for the size of the folder (0 = unlimited, otherwise the oldest artworks downloaded are erased first) or erase all of them at once with the "Clear Cache" button.
-    * By default, scraping will download 4 random heroes. Depending on your preferences, you can choose to download 1, 2, 3, 4 or all available heroes.
     * Logic is not perfect, as some limit cases are not taken into account. I will try to finetune it in future versions.
 
 * Settings allow to enable / disable the Coming Up / Previously played box. A folder next to the stations one allows access to the 4 previously played songs on a given channel. Future update will better integrate it into the UI.
