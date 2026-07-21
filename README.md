@@ -17,8 +17,7 @@ Some pointers:
   * Local folder: define a local image folder.
   * Automatic (fetch by game): need a [SteamGridDB](https://steamgriddb.com) account and an API-key (once connected, `Preferences > API tab`). Fetching is based on the song metadata and automatically retrieves "heroes" artworks to display during playback. 
 
-    * Fetching mode is a fuzzy search: if there is no exact match, the script erases the last words of the album title, then the first words of the album title, then look into the song title... until something clicks.
-    * If there is only one artwork available, logic will try to fetch heroes from the same series by looking at the same title with different numbers or subtitles.
+    * Fetching mode is a fuzzy search: if there is no exact match, the script looks for approximate titles from the album name until something clicks.
     * If nothing works, background loops back to the local folder solution. 
     * Artworks are locally stored in the `userdata/addon_data/plugin.audio.rainwave/art_cache` folder. You can set a limit for the size of the folder (0 = unlimited, otherwise the oldest artworks downloaded are erased first) or erase all of them at once with the "Clear Cache" button.
     * Logic is not perfect, as some limit cases are not taken into account. I will try to finetune it in future versions.
