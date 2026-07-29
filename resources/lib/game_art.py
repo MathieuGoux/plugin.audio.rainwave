@@ -2,6 +2,7 @@ import difflib
 import hashlib
 import json
 import os
+import random
 import re
 import threading
 import time
@@ -84,7 +85,48 @@ CACHE_SUBDIR = "art_cache"
 #      MIN_TRUNCATED_WORDS blocked blind truncation from ever
 #      reaching a legitimate single-word game name in cases like this,
 #      since the style word wasn't in the fixed _STRIP_SUFFIXES list.
-CACHE_SCHEMA_VERSION = 9
+#  10: album-vs-song-title tie-breaking now weighs match *quality*
+#      (how closely the winning query resembles what it actually
+#      matched) ahead of query length -- the previous length-only
+#      comparison could let a long, weakly-related song-title guess
+#      beat a short but exact album-title match. Entries resolved
+#      under the old logic may have picked the wrong one. Manifest
+#      entries also gained "source"/"resolved_song_title" fields (see
+#      get()'s "compilation album" handling); old entries lacking
+#      them default to album-title behavior, which is safe, but the
+#      version bump here is mainly about the matching-quality fix.
+#  11: match quality on very short (1-2 word) queries is now
+#      discounted before comparing album vs. song matches -- a
+#      "perfect" match on one generic word (e.g. a song called just
+#      "Awakening") was outranking a longer, only-moderately-fuzzy
+#      but clearly on-topic album match, since short words are far
+#      more likely to coincidentally exist as some unrelated real
+#      game's title. Candidate ranking also gained a prefix-match
+#      boost (see _best_candidate()), which can newly prefer a
+#      correctly-subtitled entry (e.g. "Dragon Quest VIII: Journey of
+#      the Cursed King") over a shorter, less specific one that
+#      happened to score similarly on raw character overlap alone.
+#  12: the short-query discount from schema 11 now exempts a query
+#      that's the genuine, untouched original title (e.g. an album
+#      really is just called "Darius") -- it was being unfairly
+#      penalized for brevity even though it's not a guess at all.
+#      Also added: recognizing the game name when it sits in the
+#      *middle* of a title rather than at either end (e.g. "Journeys:
+#      FINAL FANTASY XIV Arrangement Album"), and much better series-
+#      sibling detection -- short edition tags like "3D" are now
+#      recognized as strippable, and a title with nothing to strip at
+#      all (already the base of its series, e.g. "Game & Watch
+#      Gallery") is now searched as-is instead of being skipped
+#      entirely.
+#  13: stations where the album title is known to reliably already be
+#      the game name (see TRUSTED_ALBUM_STATIONS) now trust it
+#      outright instead of still risking the song title outvoting it.
+#      Candidate ranking also gained a year hint (e.g. "Jackal (2016)"
+#      helps pick the right one of several same-named games) and a
+#      popularity tiebreak for genuine homonyms that text similarity
+#      can't distinguish at all -- both can change which of several
+#      plausible matches gets picked.
+CACHE_SCHEMA_VERSION = 13
 
 # How long to remember "no match / no art found for this title" before
 # letting a future lookup try again. Long enough that a title with no
@@ -96,12 +138,37 @@ FAILED_TTL = 7 * 24 * 60 * 60  # 7 days
 # How many hero images to keep per game, when SteamGridDB has several
 # -- lets the slideshow rotate between a few pieces of art for a game
 # that's airing several songs in a row, instead of one static image.
+# Overridden per-instance by the "Background images per game" setting
+# (see IMAGES_PER_GAME_OPTIONS below); this is just the fallback used
+# if that setting is ever missing/out of range.
 MAX_IMAGES_PER_GAME = 4
 
-# Below this many images, the matched game alone isn't considered to
-# have "enough" art -- see _fill_from_series_siblings() -- and it's
-# worth spending a couple of extra API calls trying to round it out
-# with art from the rest of its series, if it looks like it has one.
+# Index -> actual value for the "Background images per game" enum
+# setting (values="1|2|3|4|5|6|7|8|9|10|All"). None means "no
+# client-side cap" -- whatever SteamGridDB's own /heroes endpoint
+# returns for that game, which in practice tops out somewhere in the
+# dozens even for very popular games, not literally unbounded.
+IMAGES_PER_GAME_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, None]
+
+# Rainwave stations where the album title reliably already *is* the
+# game's own name, not a compilation/arrangement album title that
+# merely references one -- see constants.py's STATIONS for the full
+# list. Currently just the "Game"/"Original" station (sid 1): its
+# albums are literally named after the game whose soundtrack they are,
+# unlike sid 2 (OC ReMix), whose album titles are creative arrangement-
+# album names (e.g. "A Knight (for a Knight)") that don't reflect the
+# game at all without external data this addon doesn't have access to
+# (no public OCReMix API exists to look that up from). See
+# _resolve_game_id() for how this is used.
+TRUSTED_ALBUM_STATIONS = {1}
+
+# In "All" mode (self._max_images_per_game is None, see
+# IMAGES_PER_GAME_OPTIONS), there's no configured target count to
+# compare against, so this is the fallback floor used instead --
+# below this many images, the matched game alone isn't considered to
+# have "enough" art (see _fill_from_series_siblings()). When a real
+# target count *is* configured, that's used instead -- see
+# _fetch_images() -- so this only really applies to "All".
 MIN_IMAGES_BEFORE_SERIES_LOOKUP = 2
 MAX_SERIES_SIBLINGS = 3
 MAX_IMAGES_PER_SIBLING = 2
@@ -151,7 +218,7 @@ _STRIP_SUFFIXES = re.compile(
 # step, not one word at a time -- so "Okami" still comes out the other
 # end correctly.
 _STYLE_SUFFIX = re.compile(
-    r"\s*[:\-]?\s*[A-Za-z]+\s+(Version|Arrangement|Cover|Suite|Medley|Rendition|Style|Take|Edit)\s*$",
+    r"\s*[:\-]?\s*[A-Za-z]+\s+(Version|Arrangement|Cover|Suite|Medley|Rendition|Style|Take|Edit|Album)\s*$",
     re.IGNORECASE,
 )
 
@@ -207,7 +274,8 @@ _NON_GAME_HINTS = re.compile(
     r"^piano (arrangement|version|cover)$|^instrumental$|"
     r"^demo$|^extended( mix)?$|^acapella$|"
     r"^arrangement$|^remaster(ed)?( version)?$|"
-    r"^tribute$|^medley$|^mashup$|^megamix$",
+    r"^tribute$|^medley$|^mashup$|^megamix$|"
+    r"^(19|20)\d{2}$",
     re.IGNORECASE,
 )
 
@@ -266,6 +334,25 @@ def _strip_subtitle(title):
     return None
 
 
+def _text_after_colon(title):
+    """The flip side of _strip_subtitle(): a colon doesn't always
+    separate "Game Title: Subtitle" -- sometimes what's *before* it is
+    a compilation/series/album brand and the actual game reference is
+    what comes *after* -- e.g. "Journeys: FINAL FANTASY XIV Arrangement
+    Album", where "Journeys" is the name of an album series, not part
+    of any game's title. Tried as a lower-priority fallback alongside
+    _strip_subtitle()'s result in _title_variants(), since the
+    "subtitle comes after" convention is the more common one and gets
+    first crack -- this only matters once that's already been tried
+    and whatever else came up short. Returns None if there's no colon,
+    or nothing meaningful follows it.
+    """
+    if ":" not in title:
+        return None
+    after = title.split(":", 1)[1].strip()
+    return after or None
+
+
 # Roman numerals covering the range real game sequels actually use in
 # practice (I-XX) -- an explicit list rather than a generative pattern
 # is easier to get right and to reason about here. Order doesn't
@@ -277,8 +364,14 @@ _ROMAN_NUMERALS = (
     "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
     "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX",
 )
+# A handful of common short edition/format tags -- "Worms 3D" isn't a
+# sequel-numbered title in the traditional sense, but for series-
+# sibling purposes it's still structurally the same shape (a base
+# franchise name plus a short trailing tag), and stripping it down to
+# "Worms" is exactly as useful here as stripping "III" would be.
+_EDITION_TAGS = ("2D", "3D", "HD", "DX", "EX")
 _TRAILING_NUMBER = re.compile(
-    rf"^(.*\S)\s+(?:\d{{1,2}}|{'|'.join(_ROMAN_NUMERALS)})\s*$"
+    rf"^(.*\S)\s+(?:\d{{1,2}}|{'|'.join(_ROMAN_NUMERALS)}|{'|'.join(_EDITION_TAGS)})\s*$"
 )
 
 
@@ -376,6 +469,10 @@ def _title_variants(title):
     if subtitle_stripped:
         add(subtitle_stripped)
 
+    after_colon = _text_after_colon(cleaned)
+    if after_colon:
+        add(after_colon)
+
     hint = _extract_from_hint(cleaned)
     if hint:
         add(hint)
@@ -411,23 +508,80 @@ def _title_variants(title):
     return variants[:MAX_VARIANTS]
 
 
-def _best_candidate(candidates, reference):
-    """Of a batch of search results, pick whichever's name is
-    textually closest to `reference` -- SteamGridDB's own ranking for
-    a query isn't always name-similarity-first, so this re-ranks
-    locally. `reference` should be the same variant that was actually
-    searched with (not necessarily the raw original title): scoring
-    "Super Mario Bros. 3" against a still-noisy "Super Mario Bros
-    Remix" barely distinguishes it from "Super Mario Bros." (both
-    score similarly close due to shared length/prefix), whereas
-    scoring against the already-cleaned "Super Mario Bros" gives a
-    much sharper, more correct signal.
-    """
-    def score(candidate):
-        name = candidate.get("name", "")
-        return difflib.SequenceMatcher(None, name.lower(), reference.lower()).ratio()
+# A 4-digit year, e.g. picking "2016" out of "Jackal (2016)" -- used
+# to help tell apart true homonyms on SteamGridDB (a handful of
+# unrelated games sharing the exact same title, e.g. three different
+# games all just called "Jackal"). See _candidate_score()/
+# _extract_year().
+_YEAR_PATTERN = re.compile(r"\b(19|20)\d{2}\b")
 
-    return max(candidates, key=score)
+# How close two candidates' scores need to be to count as a "near-tie"
+# worth breaking with the extra popularity lookup in
+# _break_tie_by_popularity() (see _search_once()). And a cap on how
+# many of the top-ranked candidates ever get compared that way, so a
+# search that returns many similarly-scored results doesn't rack up a
+# hero-count lookup for each one of them.
+_TIE_MARGIN = 0.1
+_TIEBREAK_CANDIDATE_LIMIT = 3
+
+
+def _extract_year(*texts):
+    """The first 4-digit year found across `texts`, checked in order
+    (so pass the more authoritative source first), or None. Used to
+    give _candidate_score() an extra disambiguation signal beyond
+    plain text similarity -- see _search_once().
+    """
+    for text in texts:
+        if not text:
+            continue
+        match = _YEAR_PATTERN.search(text)
+        if match:
+            return match.group(0)
+    return None
+
+
+def _candidate_score(candidate, reference, hint_year=None):
+    """How well `candidate` matches `reference` -- see _rank_candidates()."""
+    name = candidate.get("name", "")
+    score = difflib.SequenceMatcher(None, name.lower(), reference.lower()).ratio()
+    if name.lower().startswith(reference.lower()):
+        # A candidate whose name literally *starts with* the query is
+        # a much stronger, less ambiguous signal of relevance than
+        # generic character overlap -- e.g. "Dragon Quest VIII" vs.
+        # "Dragon Quest VIII: Journey of the Cursed King" scores well
+        # but not outstandingly by similarity alone, since a third of
+        # the candidate name is subtitle the query never mentioned. A
+        # direct, unbroken prefix match like that should outrank any
+        # non-prefix candidate regardless of how close their raw
+        # similarity scores are.
+        score += 1.0
+    if hint_year and hint_year in name:
+        # A release year mentioned in the original title/song
+        # ("Jackal (2016)") and echoed in a candidate's own name is a
+        # strong, specific disambiguator for true homonyms -- distinct
+        # unrelated games that happen to share an identical title.
+        score += 0.5
+    return score
+
+
+def _rank_candidates(candidates, reference, hint_year=None):
+    """Sort a batch of search results by how well they match
+    `reference`, best first -- SteamGridDB's own ranking for a query
+    isn't always name-similarity-first, so this re-ranks locally.
+    `reference` should be the same variant that was actually searched
+    with (not necessarily the raw original title): scoring "Super
+    Mario Bros. 3" against a still-noisy "Super Mario Bros Remix"
+    barely distinguishes it from "Super Mario Bros." (both score
+    similarly close due to shared length/prefix), whereas scoring
+    against the already-cleaned "Super Mario Bros" gives a much
+    sharper, more correct signal.
+
+    Returns the full sorted list, not just the winner, so callers can
+    detect a near-tie among the top few and break it with a different
+    signal entirely -- see _search_once()'s popularity tiebreak, for
+    genuine homonyms that text similarity alone can never resolve.
+    """
+    return sorted(candidates, key=lambda c: _candidate_score(c, reference, hint_year), reverse=True)
 
 
 # Slash, tilde, pipe, en/em dash, or a spaced hyphen -- deliberately
@@ -604,12 +758,24 @@ class GameArtProvider:
         # repeat itself while Kodi keeps running.
         self._warned_no_key = False
         self._settings_loaded = False
+        self._max_images_per_game = MAX_IMAGES_PER_GAME
         self.reload_settings()
 
     def reload_settings(self):
         addon = xbmcaddon.Addon()
         new_api_key = addon.getSettingString("steamgriddb_api_key").strip()
         new_cache_limit_mb = addon.getSettingInt("art_cache_limit_mb")
+
+        # Doesn't need the relevant_changed/manifest-reload dance below
+        # -- it only affects future fetches, nothing already on disk,
+        # so there's no reason not to just always pick up the current
+        # value.
+        images_index = addon.getSettingInt("art_images_per_game")
+        self._max_images_per_game = (
+            IMAGES_PER_GAME_OPTIONS[images_index]
+            if 0 <= images_index < len(IMAGES_PER_GAME_OPTIONS)
+            else MAX_IMAGES_PER_GAME
+        )
 
         relevant_changed = (
             not self._settings_loaded
@@ -757,19 +923,22 @@ class GameArtProvider:
             self._save_manifest()
             self._last_manifest_save = time.time()
 
-    def get(self, game_title, song_title=None):
+    def get(self, game_title, song_title=None, sid=None):
         """Return whatever background image paths are already cached
         for this title (a list, possibly empty), and kick off a
         background fetch if we've never looked it up (or the last
         attempt failed long enough ago to be worth retrying).
 
-        song_title is an optional fallback signal used only if a fetch
-        actually happens and the album-title cascade comes up empty --
-        see _resolve_game_id(). It has no effect on cache lookups
-        (caching is keyed on game_title alone), so passing a different
-        song_title for a later song of the same already-resolved (or
-        already permanently-failed) album is harmless -- it's simply
-        never consulted again once that album has an answer either way.
+        song_title is used two ways: as a fallback search signal if a
+        fetch actually happens and the album-title cascade comes up
+        empty (see _resolve_game_id()), and to decide *which* cache
+        entry applies in the first place -- see the "compilation
+        album" handling below. sid identifies which Rainwave station
+        this is playing on -- on stations where the album title is
+        known to reliably already be the game name (see
+        TRUSTED_ALBUM_STATIONS in _resolve_game_id()), it skips the
+        song-title tier entirely rather than risking it outvoting a
+        perfectly good album match.
         """
         if not game_title:
             return []
@@ -790,9 +959,39 @@ class GameArtProvider:
                 )
             return []
 
-        key = _cache_key(game_title)
+        album_key = _cache_key(game_title)
 
         with self._lock:
+            album_entry = self._index.get(album_key)
+
+            # A cached entry resolved via the *song* title (not the
+            # album title) means the album itself didn't map to one
+            # specific game on its own -- almost always a sign it's a
+            # compilation/anthology album covering several different
+            # games' music, where whichever game the album-level
+            # cache entry happened to land on only really describes
+            # the one song that resolved it. A different song on that
+            # same album could just as easily be a remix of a
+            # completely different game, so rather than keep applying
+            # that first song's art to every other song on the album,
+            # a song that doesn't match the one already on file gets
+            # its own independent cache entry (keyed on album+song
+            # together) and its own fresh resolution attempt.
+            #
+            # Album-title-sourced entries don't get this treatment:
+            # the album title itself was specific enough to resolve
+            # something on its own, so it's treated as applying to the
+            # whole album, same as before this existed.
+            if (
+                album_entry is not None
+                and album_entry.get("source") == "song"
+                and song_title
+                and song_title != album_entry.get("resolved_song_title")
+            ):
+                key = _cache_key(f"{game_title}\x1f{song_title}")
+            else:
+                key = album_key
+
             entry = self._index.get(key)
             is_pending = key in self._pending
 
@@ -818,16 +1017,43 @@ class GameArtProvider:
             self._pending.add(key)
 
         thread = threading.Thread(
-            target=self._fetch, args=(game_title, song_title, key), daemon=True
+            target=self._fetch, args=(game_title, song_title, key, sid), daemon=True
         )
         thread.start()
         return []
 
+    def get_random_images(self, count=8):
+        """A random sampling of already-cached game art, regardless of
+        what's currently playing -- used by Slideshow's "Random
+        (SteamGridDB)" source and as an alternate Automatic-mode
+        fallback (see slideshow.py).
+
+        Purely a read of whatever's already on disk -- it never
+        triggers a new fetch, so it returns nothing until at least a
+        few games have actually been resolved through Automatic mode
+        at some point (this session or a past one; the cache persists
+        across restarts). That's a deliberate trade-off: SteamGridDB
+        doesn't offer a documented "random game" endpoint to pull
+        fresh, unrelated art from on demand, so this reuses the
+        library that's already been built up through normal use rather
+        than guessing at an API surface that may not exist.
+        """
+        with self._lock:
+            pool = []
+            for entry in self._index.values():
+                for name in entry.get("images") or []:
+                    pool.append(os.path.join(self._cache_dir, name))
+
+        if not pool:
+            return []
+        random.shuffle(pool)
+        return pool[:count]
+
     # -- background thread work below; never called from the main loop --
 
-    def _fetch(self, game_title, song_title, key):
+    def _fetch(self, game_title, song_title, key, sid=None):
         try:
-            images = self._fetch_images(game_title, song_title, key)
+            images, source = self._fetch_images(game_title, song_title, key, sid)
         except self._RateLimitedError:
             # Don't cache this as "no art found" -- we got rate-limited,
             # not a genuine empty result (see _RateLimitedError's
@@ -839,7 +1065,7 @@ class GameArtProvider:
             return
         except Exception as e:
             log(f"GameArt: lookup failed for '{game_title}': {e}")
-            images = []
+            images, source = [], None
 
         with self._lock:
             now = time.time()
@@ -848,6 +1074,13 @@ class GameArtProvider:
                 "images": images,
                 "fetched_at": now,
                 "last_used_at": now,
+                "source": source,
+                # Only meaningful when source=="song" -- see get()'s
+                # "compilation album" handling. Recorded regardless of
+                # whether this fetch used the plain album key or an
+                # album+song composite key, so a later, different song
+                # of the same album can tell the two apart.
+                "resolved_song_title": song_title if source == "song" else None,
             }
             self._pending.discard(key)
             self._enforce_cache_limit()
@@ -904,7 +1137,7 @@ class GameArtProvider:
             raise self._RateLimitedError()
         log(f"GameArt: request failed for '{context}': HTTP {e.code}")
 
-    def _search_once(self, variant):
+    def _search_once(self, variant, hint_year=None):
         """Run a single autocomplete search and return (game_id,
         matched_name), or (None, None) if this particular query had no
         results. Raises _AuthError on a 401 or _RateLimitedError on a
@@ -925,38 +1158,255 @@ class GameArtProvider:
         if not candidates:
             return None, None
 
-        best = _best_candidate(candidates, variant)
+        ranked = _rank_candidates(candidates, variant, hint_year)
+        best = ranked[0]
+
+        # A near-tie among the top few candidates means text
+        # similarity alone can't really distinguish them -- most
+        # often true homonyms, e.g. three entirely unrelated games all
+        # just called "Jackal". Breaking that with popularity (hero
+        # art count) as a proxy for "the better-known, more likely
+        # intended one" beats an otherwise arbitrary pick among
+        # several textually-identical names.
+        best_score = _candidate_score(best, variant, hint_year)
+        tied = [
+            c for c in ranked[:_TIEBREAK_CANDIDATE_LIMIT]
+            if best_score - _candidate_score(c, variant, hint_year) <= _TIE_MARGIN
+        ]
+        if len(tied) > 1:
+            popular = self._break_tie_by_popularity(tied, variant)
+            if popular is not None:
+                best = popular
+
         return best.get("id"), best.get("name", variant)
 
-    def _resolve_game_id(self, game_title, song_title):
-        """Try every album-title-derived query first (see
-        _title_variants()); only if every single one of those comes up
-        empty, fall back to a query derived from the song title (see
-        _song_title_variants()) -- the album/compilation title is
-        still the more reliable signal on the (common) occasions it
-        does match something. Returns (game_id, matched_name, source)
-        where source is "album" or "song", or (None, None, None).
+    def _break_tie_by_popularity(self, candidates, reference):
+        """Among a handful of near-equally-good candidates, prefer
+        whichever has the most hero art on SteamGridDB -- a reasonable
+        proxy for "the better-known, more likely intended entry",
+        useful for genuine homonyms that text similarity can never
+        tell apart on its own. Costs one extra API call per candidate,
+        so this is only ever invoked on a small, already-narrowed-down
+        set -- see _search_once().
+
+        Returns None (the caller keeps its own default pick) if this
+        can't reach a confident answer either -- e.g. every candidate
+        errors out, or they all come back with zero hero art.
+        Deliberately doesn't let a 401/429 hit here abort the whole
+        lookup: a failed tiebreak just means falling back to the
+        text-similarity winner, not a hard failure. Any rate-limit
+        backoff is still recorded as a side effect of
+        _handle_http_error() either way, so future lookups still
+        respect it.
         """
-        for variant in _title_variants(game_title):
-            game_id, matched_name = self._search_once(variant)
+        best_candidate = None
+        best_count = -1
+        for candidate in candidates:
+            cid = candidate.get("id")
+            if not cid:
+                continue
+            try:
+                heroes = self._api_get(f"/heroes/game/{cid}", {"types": "static"})
+            except urllib.error.HTTPError as e:
+                try:
+                    self._handle_http_error(e, candidate.get("name", reference))
+                except Exception:
+                    pass
+                continue
+            except Exception as e:
+                log(f"GameArt: popularity tiebreak failed for '{candidate.get('name', reference)}': {e}")
+                continue
+            count = len(heroes.get("data") or [])
+            if count > best_count:
+                best_count = count
+                best_candidate = candidate
+
+        if best_candidate is not None and best_count > 0:
+            names = ", ".join(c.get("name", "?") for c in candidates)
+            log(
+                f"GameArt: multiple near-identical matches for '{reference}' ({names}) -- "
+                f"picked '{best_candidate.get('name')}' as the most popular ({best_count} hero image(s))"
+            )
+            return best_candidate
+        return None
+
+    def _first_match(self, variants, hint_year=None):
+        """Try each query in `variants`, in order, and return
+        (game_id, matched_name, variant) for the first one that finds
+        anything -- or None if none of them do.
+        """
+        for variant in variants:
+            game_id, matched_name = self._search_once(variant, hint_year)
             if game_id:
+                return game_id, matched_name, variant
+        return None
+
+    def _resolve_game_id(self, game_title, song_title, sid=None):
+        """Find a game_id via both the album-title cascade (see
+        _title_variants()) and the song-title cascade (see
+        _song_title_variants()), and pick between them if both
+        actually find something.
+
+        Exception: on TRUSTED_ALBUM_STATIONS, the album title is
+        skipped straight to being trusted outright, with the song
+        title only consulted as a last resort if the album cascade
+        finds nothing at all -- see below.
+
+        Earlier versions of this tried the album title exhaustively
+        and only even looked at the song title if the album cascade
+        found *nothing at all* -- which meant a technically-valid but
+        too-generic album match (e.g. a compilation album "Donkey Kong
+        & Friends" truncating down to just "Donkey Kong") would always
+        win over a much more specific song-title match (e.g. a song
+        called "Donkey Kong Country Aquatic Ambience Revisited"
+        resolving to "Donkey Kong Country") purely because it was
+        tried first, never even attempting the song title once the
+        album cascade already had *an* answer.
+
+        Now both are tried every time, and if both succeed, one is
+        picked using three rules, in priority order:
+          1. The "most perfect" match wins -- how closely the winning
+             query resembles what SteamGridDB actually returned for
+             it, not just how long the query was. A long, specific-
+             looking query that only weakly resembles its result is a
+             *weaker* signal than a short query that matched
+             something near-exactly, not a stronger one -- e.g.
+             querying "Uh Oh! The Beat Have Started to Move!" and
+             getting back the barely-related "Uh Oh Bartender" should
+             lose to a clean, exact "Metal Gear" match every time,
+             even though the first query has more words in it. This
+             replaced an earlier version of this method that compared
+             query length alone, which was exactly backwards on cases
+             like that one.
+          2. Among two comparably good matches, the longer/more
+             specific query wins (e.g. "Donkey Kong Country" beats a
+             bare "Donkey Kong" when both are essentially exact
+             matches for their respective query).
+          3. Ties, and "only one side found anything at all", default
+             to the album title.
+
+        This does mean a full song-title attempt now happens even when
+        the album title alone would have been enough -- roughly
+        doubling the worst-case API calls for a single lookup. Given
+        how aggressively this is cached afterwards (a resolved game is
+        never looked up again), that's a one-time cost per distinct
+        game, not a recurring one, and was judged worth it for the
+        accuracy gain. Returns (game_id, matched_name, source) where
+        source is "album" or "song", or (None, None, None).
+        """
+        hint_year = _extract_year(game_title, song_title)
+
+        if sid in TRUSTED_ALBUM_STATIONS:
+            # On these stations the album title reliably already *is*
+            # the game name -- e.g. Rainwave's "Game"/"Original"
+            # station -- so there's nothing to vote on: a successful
+            # album match is trusted outright, without ever even
+            # attempting the song title (which could otherwise, in
+            # rare cases, outrank a known-good match over some
+            # unrelated word it happens to share with a different
+            # game). The song title only gets a turn if the album
+            # title genuinely finds nothing at all, as a last resort
+            # rather than giving up outright.
+            album_match = self._first_match(_title_variants(game_title), hint_year)
+            if album_match:
+                game_id, matched_name, variant = album_match
                 if variant != game_title:
                     log(
                         f"GameArt: '{game_title}' had no exact match, "
                         f"fell back to '{matched_name}' via query '{variant}'"
                     )
                 return game_id, matched_name, "album"
-
-        for variant in _song_title_variants(song_title):
-            game_id, matched_name = self._search_once(variant)
-            if game_id:
+            song_match = self._first_match(_song_title_variants(song_title), hint_year) if song_title else None
+            if song_match:
+                game_id, matched_name, variant = song_match
                 log(
-                    f"GameArt: '{game_title}' had no album-based match, "
-                    f"fell back to song-title hint '{matched_name}' via query '{variant}'"
+                    f"GameArt: '{game_title}' had no album-based match even on a "
+                    f"trusted-album station, fell back to song-title hint '{matched_name}' "
+                    f"via query '{variant}'"
                 )
                 return game_id, matched_name, "song"
+            return None, None, None
 
-        return None, None, None
+        album_match = self._first_match(_title_variants(game_title), hint_year)
+        song_match = self._first_match(_song_title_variants(song_title), hint_year) if song_title else None
+
+        if not album_match and not song_match:
+            return None, None, None
+
+        if album_match and not song_match:
+            game_id, matched_name, variant = album_match
+            if variant != game_title:
+                log(
+                    f"GameArt: '{game_title}' had no exact match, "
+                    f"fell back to '{matched_name}' via query '{variant}'"
+                )
+            return game_id, matched_name, "album"
+
+        if song_match and not album_match:
+            game_id, matched_name, variant = song_match
+            log(
+                f"GameArt: '{game_title}' had no album-based match, "
+                f"fell back to song-title hint '{matched_name}' via query '{variant}'"
+            )
+            return game_id, matched_name, "song"
+
+        # Both found something -- see the three rules in the
+        # docstring above. match_rank() implements all three at once
+        # as a single sortable tuple: near-perfect-or-not first, then
+        # the continuous quality score, then word count, then
+        # character count. Comparing the tuples with > naturally
+        # applies them in that priority order, and an exact tie
+        # (including the degenerate case of neither being especially
+        # good) falls through to the `return album_...` below, which
+        # is rule 3.
+        def match_rank(variant, matched_name, original_title):
+            quality = difflib.SequenceMatcher(None, variant.lower(), matched_name.lower()).ratio()
+            word_count = len(variant.split())
+            # A "perfect" match on a single short/generic word (e.g.
+            # a song title that's just "Awakening") is a much weaker
+            # signal than the same quality on a longer, more
+            # distinctive query -- short common words are far more
+            # likely to coincidentally exist as some unrelated but
+            # real game's title, purely by chance, than a specific
+            # multi-word phrase is. Without this, a short, exact
+            # coincidental match could outrank a long, clearly-
+            # on-topic query that only scored moderately well (e.g.
+            # "MONSTER HUNTER THE JAZZ" landing on "Monster Hunter
+            # Tri" isn't a perfect string match, but it's obviously
+            # the more trustworthy result compared to some unrelated
+            # game that happens to be called exactly "Awakening").
+            #
+            # This discount only applies to a variant we arrived at by
+            # trimming/guessing, though -- if the winning variant *is*
+            # the original, untouched title (e.g. an album genuinely
+            # just called "Darius"), that's Rainwave directly telling
+            # us the specific, complete name, not our own uncertain
+            # truncation, and shouldn't be penalized for its length at
+            # all.
+            is_original = (
+                original_title
+                and variant.strip().lower() == original_title.strip().lower()
+            )
+            if not is_original:
+                if word_count <= 1:
+                    quality *= 0.5
+                elif word_count == 2:
+                    quality *= 0.75
+            near_perfect = quality >= 0.9
+            return (near_perfect, round(quality, 3), word_count, len(variant))
+
+        album_id, album_name, album_variant = album_match
+        song_id, song_name, song_variant = song_match
+
+        if match_rank(song_variant, song_name, song_title) > match_rank(album_variant, album_name, game_title):
+            log(
+                f"GameArt: '{game_title}' matched both album ('{album_name}' via "
+                f"'{album_variant}') and song title ('{song_name}' via '{song_variant}') "
+                f"-- song-title match is the better one, using it"
+            )
+            return song_id, song_name, "song"
+
+        return album_id, album_name, "album"
 
     def _download_heroes(self, game_id, matched_name, key, images, limit):
         """Fetch up to `limit` more hero images for `game_id` and
@@ -975,7 +1425,7 @@ class GameArtProvider:
         caught here, since the caller (ultimately _fetch()) needs to
         see those to avoid caching a false "no match".
         """
-        if limit <= 0:
+        if limit is not None and limit <= 0:
             return 0
 
         try:
@@ -1003,41 +1453,86 @@ class GameArtProvider:
                 added += 1
         return added
 
-    def _fill_from_series_siblings(self, primary_game_id, matched_name, key, images):
-        """When the matched game alone doesn't have enough hero art
-        (see MIN_IMAGES_BEFORE_SERIES_LOOKUP), look for other games in
-        the same numbered/subtitled series and borrow a couple of
-        images from each -- e.g. "Last Bible III" turning up only one
-        image is a good occasion to also try "Last Bible", "Last
-        Bible II", etc., in case SteamGridDB's own search for the bare
-        series name (see _series_base_name()) turns any of them up.
-
-        A no-op if the matched name doesn't look like part of a
-        numbered/subtitled series at all, or if the series-name search
-        itself comes up empty -- this is a bonus on top of an already-
-        successful match, not something worth failing over.
+    def _search_candidates(self, query):
+        """Run a single autocomplete search and return its raw
+        candidate list (empty on any failure). Used by
+        _fill_from_series_siblings(), where -- unlike _search_once(),
+        which only cares about the single best match -- the whole
+        batch of results matters, since any of them could be a series
+        sibling worth borrowing art from.
         """
-        base_name = _series_base_name(matched_name)
-        if not base_name:
-            return
-
-        quoted = urllib.parse.quote(base_name, safe="")
+        quoted = urllib.parse.quote(query, safe="")
         try:
             search = self._api_get(f"/search/autocomplete/{quoted}")
         except urllib.error.HTTPError as e:
-            self._handle_http_error(e, base_name)
-            return
+            self._handle_http_error(e, query)
+            return []
         except Exception as e:
-            log(f"GameArt: series search failed for '{base_name}': {e}")
-            return
+            log(f"GameArt: series search failed for '{query}': {e}")
+            return []
+        return search.get("data") or []
 
-        candidates = search.get("data") or []
-        siblings = [
-            c for c in candidates
-            if c.get("id") != primary_game_id
-            and c.get("name", "").lower().startswith(base_name.lower())
-        ][:MAX_SERIES_SIBLINGS]
+    def _fill_from_series_siblings(self, primary_game_id, matched_name, key, images):
+        """When the matched game alone doesn't have as many hero
+        images as configured (see _fetch_images()'s "needs_more"
+        check), look for other games in the same series and borrow a
+        couple of images from each -- e.g. "Last Bible III" turning up
+        only one image is a good occasion to also try "Last Bible",
+        "Last Bible II", etc.
 
+        Two search passes, both filtered to candidates whose name
+        actually starts with whatever base was searched (so a
+        same-franchise game that merely shares a few words doesn't
+        get pulled in as if it were a direct sibling):
+
+        1. The obvious base -- _series_base_name() strips a trailing
+           sequel number, edition tag ("Worms 3D" -> "Worms"), or
+           subtitle, if there is one. If there isn't (the matched name
+           might already *be* the series' base, e.g. "Game & Watch
+           Gallery", with "Game & Watch Gallery 2"/"3" as its
+           siblings), the matched name itself is searched verbatim
+           instead, as long as it's not so short/generic that doing so
+           would mostly return noise.
+        2. If that base still has 3+ words, a broader second pass
+           drops one more word and searches again. This is what
+           catches a sibling that doesn't share this game's own
+           edition tag as a prefix -- e.g. "Dance Dance Revolution
+           Extreme" narrows down to "Dance Dance Revolution", which
+           surfaces "...Extreme 2" *and* "...X" alike, not just
+           entries that also happen to say "Extreme".
+
+        A no-op if there's no usable base to search at all, or if
+        neither search pass turns up anything -- this is a bonus on
+        top of an already-successful match, not something worth
+        failing over.
+        """
+        base_name = _series_base_name(matched_name)
+        if not base_name:
+            if len(matched_name.split()) >= 2:
+                base_name = matched_name
+            else:
+                return
+
+        seen_ids = {primary_game_id}
+        siblings = []
+
+        def collect(query, prefix_filter):
+            for candidate in self._search_candidates(query):
+                cid = candidate.get("id")
+                name = candidate.get("name", "")
+                if not cid or cid in seen_ids or not name.lower().startswith(prefix_filter.lower()):
+                    continue
+                seen_ids.add(cid)
+                siblings.append(candidate)
+
+        collect(base_name, base_name)
+
+        base_words = base_name.split()
+        if len(base_words) >= 3 and len(siblings) < MAX_SERIES_SIBLINGS:
+            broader_base = " ".join(base_words[:-1])
+            collect(broader_base, broader_base)
+
+        siblings = siblings[:MAX_SERIES_SIBLINGS]
         if not siblings:
             return
 
@@ -1047,19 +1542,21 @@ class GameArtProvider:
         )
 
         for sibling in siblings:
-            if len(images) >= MAX_IMAGES_PER_GAME:
+            if self._max_images_per_game is not None and len(images) >= self._max_images_per_game:
                 break
             sibling_id = sibling.get("id")
             if not sibling_id:
                 continue
-            remaining = min(MAX_IMAGES_PER_SIBLING, MAX_IMAGES_PER_GAME - len(images))
+            remaining = MAX_IMAGES_PER_SIBLING
+            if self._max_images_per_game is not None:
+                remaining = min(remaining, self._max_images_per_game - len(images))
             self._download_heroes(sibling_id, sibling.get("name", base_name), key, images, remaining)
 
-    def _fetch_images(self, game_title, song_title, key):
+    def _fetch_images(self, game_title, song_title, key, sid=None):
         try:
-            game_id, matched_name, _source = self._resolve_game_id(game_title, song_title)
+            game_id, matched_name, source = self._resolve_game_id(game_title, song_title, sid)
         except self._AuthError:
-            return []
+            return [], None
         # _RateLimitedError deliberately NOT caught here -- it needs
         # to propagate up to _fetch(), which handles it by skipping
         # the cache write entirely rather than recording a false "no
@@ -1072,15 +1569,37 @@ class GameArtProvider:
                 f"(tried {tried} query variant(s), including song-title fallback)",
                 xbmc.LOGDEBUG,
             )
-            return []
+            return [], None
 
         images = []
-        self._download_heroes(game_id, matched_name, key, images, MAX_IMAGES_PER_GAME)
+        self._download_heroes(game_id, matched_name, key, images, self._max_images_per_game)
 
-        if len(images) < MIN_IMAGES_BEFORE_SERIES_LOOKUP:
-            self._fill_from_series_siblings(game_id, matched_name, key, images)
+        if self._max_images_per_game is None:
+            needs_more = len(images) < MIN_IMAGES_BEFORE_SERIES_LOOKUP
+        else:
+            needs_more = len(images) < self._max_images_per_game
 
-        return images
+        if needs_more:
+            try:
+                self._fill_from_series_siblings(game_id, matched_name, key, images)
+            except Exception as e:
+                # Deliberately swallowed, including _AuthError/
+                # _RateLimitedError -- unlike the primary
+                # _download_heroes() call above (where propagating a
+                # rate limit is correct, since `images` is still empty
+                # and there's nothing worth keeping yet), `images`
+                # already has a good primary result by this point. A
+                # failed *bonus* enrichment attempt shouldn't throw
+                # that away. The rate-limit backoff window itself is
+                # still recorded either way (that happens as a side
+                # effect inside _handle_http_error, regardless of
+                # whether the resulting exception is caught here or
+                # left to propagate), so future lookups still respect
+                # it -- this only affects whether *this* fetch's
+                # already-good result gets kept.
+                log(f"GameArt: series-sibling lookup failed for '{matched_name}': {e}")
+
+        return images, source
 
     def _download(self, url, filename):
         dest = os.path.join(self._cache_dir, filename)

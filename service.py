@@ -153,8 +153,12 @@ class RainwavePlayerMonitor(xbmc.Player):
         # the API most recently reported (see slideshow.py/game_art.py).
         # The song title is passed too, only actually used as a
         # fallback search signal if the album title alone can't find
-        # a match -- see game_art.py's _resolve_game_id().
-        self.slideshow.set_current_game(song.get("album"), song.get("title"))
+        # a match -- see game_art.py's _resolve_game_id(). The
+        # station sid lets that same method trust the album title
+        # outright on stations where it's reliably the game name (see
+        # TRUSTED_ALBUM_STATIONS there), skipping the song-title tier
+        # entirely instead of risking it outvoting a known-good match.
+        self.slideshow.set_current_game(song.get("album"), song.get("title"), self._current_sid())
 
     def onAVStarted(self):
         self._check_active_state()
