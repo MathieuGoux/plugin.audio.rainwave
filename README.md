@@ -3,7 +3,7 @@ A simple Kodi addon for Rainwave Internet Radio.
 
 ------------------------------
 
-Version 2.15
+Version 2.20
 
 An addon for Kodi based on the [Rainwave Api](https://rainwave.cc/api4/) for playing the different stations (All, Overclocked Remixes, Chiptunes etc.) and displaying a dialog box akin to the [Twitch Widget](https://rainwave.cc/twitch) for the current, previously played and next songs.
 
@@ -18,9 +18,11 @@ Some pointers:
   * Automatic (fetch by game): need a [SteamGridDB](https://steamgriddb.com) account and an API-key (once connected, `Preferences > API tab`). Fetching is based on the song metadata and automatically retrieves "heroes" artworks to display during playback. 
 
     * Fetching mode is a fuzzy search: if there is no exact match, the script looks for approximate titles from the album name until something clicks.
-    * If nothing works, background loops back to the local folder solution. 
+    * If nothing works, background can loop back to the local folder solution, to "Random" (chooses a heroe artwork already downloaded), or "None" (keep the last artworks downloaded).
     * Artworks are locally stored in the `userdata/addon_data/plugin.audio.rainwave/art_cache` folder. You can set a limit for the size of the folder (0 = unlimited, otherwise the oldest artworks downloaded are erased first) or erase all of them at once with the "Clear Cache" button.
-    * Logic is not perfect, as some limit cases are not taken into account. I will try to finetune it in future versions.
+    * Logic is not perfect, as some limit cases are not taken into account.
+   
+    * Random: need a SteamGriDB API-key. Will loop through heroes already downloaded with Automatic Mode.
 
 * Settings allow to enable / disable the Coming Up / Previously played box. A folder next to the stations one allows access to the 4 previously played songs on a given channel. Future update will better integrate it into the UI.
 * Authentification through the Rainwave API doesn't work, as Rainwave pivoted to a discord-only auth some years ago. As such, there seems to be no way to rate / request songs.
