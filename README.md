@@ -20,6 +20,7 @@ Some pointers:
     * Fetching mode is a fuzzy search: if there is no exact match, the script looks for approximate titles from the album name until something clicks.
     * If nothing works, background can loop back to the local folder solution, to "Random" (chooses a heroe artwork already downloaded), or "None" (keep the last artworks downloaded).
     * Artworks are locally stored in the `userdata/addon_data/plugin.audio.rainwave/art_cache` folder. You can set a limit for the size of the folder (0 = unlimited, otherwise the oldest artworks downloaded are erased first) or erase all of them at once with the "Clear Cache" button.
+    * You can define the number of artworks to download. Except for "all", if there is less artworks for a given game than the number define in the settings, logic will try and fetch artworks from the same serie to populate the backgrounds (e.g., it will seek artworks from "Earthworm Jim 2" and "3D" for "Earthworm Jim").
     * Logic is not perfect, as some limit cases are not taken into account.
    
   * Random: need a SteamGriDB API-key. Will loop through heroes already downloaded with Automatic Mode.
