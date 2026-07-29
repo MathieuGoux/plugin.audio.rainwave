@@ -22,7 +22,7 @@ Some pointers:
     * Artworks are locally stored in the `userdata/addon_data/plugin.audio.rainwave/art_cache` folder. You can set a limit for the size of the folder (0 = unlimited, otherwise the oldest artworks downloaded are erased first) or erase all of them at once with the "Clear Cache" button.
     * Logic is not perfect, as some limit cases are not taken into account.
    
-    * Random: need a SteamGriDB API-key. Will loop through heroes already downloaded with Automatic Mode.
+  * Random: need a SteamGriDB API-key. Will loop through heroes already downloaded with Automatic Mode.
 
 * Settings allow to enable / disable the Coming Up / Previously played box. A folder next to the stations one allows access to the 4 previously played songs on a given channel. Future update will better integrate it into the UI.
 * Authentification through the Rainwave API doesn't work, as Rainwave pivoted to a discord-only auth some years ago. As such, there seems to be no way to rate / request songs.
