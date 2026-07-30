@@ -285,6 +285,29 @@ class RainwavePlayerMonitor(xbmc.Player):
             # is harmless either way).
             if xbmcaddon.Addon().getSettingBool("inhibit_screensaver"):
                 xbmc.executebuiltin('InhibitScreensaver(false)')
+                
+    def onAction(self, action):
+        # Open game selector when "Information" key (i) is pressed
+        if action.getId() == xbmcgui.ACTION_SHOW_INFO:
+            self._open_game_selector()
+        super().onAction(action)
+        
+    def _open_game_selector(self):
+        """Open game selector dialog and update slideshow with selected game."""
+        try:
+            from .game_selector import GameSelectorDialog
+            dialog = GameSelectorDialog(
+                "game_selector.xml",
+                xbmcaddon.Addon().getAddonInfo("path"),
+                api_key=xbmcaddon.Addon().getSettingString("steamgriddb_api_key")
+            )
+            dialog.doModal()
+
+            if dialog.selected_game:
+                self.slideshow.set_manual_game(dialog.selected_game["name"])
+                log(f"Game selector: Using art for {dialog.selected_game['name']}")
+        except Exception as e:
+            log(f"Game selector failed: {e}", xbmc.LOGERROR)            
 
 
 def _reload_display_settings(home):

@@ -743,10 +743,12 @@ class GameArtProvider:
         self._lock = threading.Lock()
         self._pending = set()  # cache keys currently being fetched
         self._index = {}  # cache key -> manifest entry (see _load_manifest)
+        self._manual_overrides = {} #Manual overrides
         self._cache_dir = None
         self._api_key = ""
         self._cache_limit_mb = 0
         self._last_manifest_save = 0.0
+        self._enable_series_siblings = True #Look for siblings
         # Rate-limit backoff: see _handle_http_error(). 0 means "not
         # currently backing off".
         self._rate_limited_until = 0.0
@@ -765,6 +767,13 @@ class GameArtProvider:
         addon = xbmcaddon.Addon()
         new_api_key = addon.getSettingString("steamgriddb_api_key").strip()
         new_cache_limit_mb = addon.getSettingInt("art_cache_limit_mb")
+        
+        # Load series siblings setting (default to True if not set)
+        try:
+            self._enable_series_siblings = addon.getSettingBool("enable_series_siblings")
+        except RuntimeError:
+            # Setting doesn't exist yet - default to enabled
+            self._enable_series_siblings = True
 
         # Doesn't need the relevant_changed/manifest-reload dance below
         # -- it only affects future fetches, nothing already on disk,
@@ -800,7 +809,7 @@ class GameArtProvider:
         self._cache_dir = os.path.join(profile, CACHE_SUBDIR)
         xbmcvfs.mkdirs(self._cache_dir)
         with self._lock:
-            self._index = self._load_manifest()
+            self._index, self._manual_overrides = self._load_manifest()
             # Covers the user lowering the limit mid-session -- without
             # this, shrinking the cap in Add-on Settings would only
             # take effect the next time something new gets fetched,
@@ -816,21 +825,55 @@ class GameArtProvider:
             with open(self._manifest_path(), "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:
-            return {}
+            return {}, {}
 
         if data.get("_schema") != CACHE_SCHEMA_VERSION:
             log("GameArt: cache schema changed, starting fresh")
-            return {}
+            return {}, {}
 
-        return data.get("games", {})
+        # Handle old format: games at root level (no "games" wrapper)
+        if "games" not in data:
+            games = {k: v for k, v in data.items()
+                     if k not in ("_schema", "manual_overrides")}
+            manual_overrides = data.get("manual_overrides", {})
+            return games, manual_overrides
 
+        return data.get("games", {}), data.get("manual_overrides", {})
+        
+    def reload_manual_overrides(self):
+        """Reload manual_overrides from disk without affecting games cache."""
+        try:
+            with open(self._manifest_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self._manual_overrides = data.get("manual_overrides", {})
+        except Exception:
+            self._manual_overrides = {}
+            
     def _save_manifest(self):
+        """Save manifest to disk, merging in any external changes first."""
         # Caller already holds self._lock.
+
+        # Reload from disk to merge any external changes (e.g., from game_selector.py)
+        try:
+            with open(self._manifest_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # Preserve our in-memory games cache but update manual_overrides
+            if "manual_overrides" in data:
+                self._manual_overrides = data["manual_overrides"]
+        except Exception:
+            pass  # Keep existing data if reload fails
+
+        # Save merged state
         try:
             with open(self._manifest_path(), "w", encoding="utf-8") as f:
-                json.dump({"_schema": CACHE_SCHEMA_VERSION, "games": self._index}, f)
+                json.dump({
+                    "_schema": CACHE_SCHEMA_VERSION,
+                    "games": self._index,
+                    "manual_overrides": self._manual_overrides
+                }, f)
         except Exception as e:
             log(f"GameArt: could not save manifest: {e}")
+
 
     def _maybe_save_manifest(self):
         # Caller already holds self._lock. See MANIFEST_SAVE_INTERVAL.
@@ -838,6 +881,7 @@ class GameArtProvider:
         if now - self._last_manifest_save >= MANIFEST_SAVE_INTERVAL:
             self._save_manifest()
             self._last_manifest_save = now
+            #self.reload_manual_overrides()  # Reload after save
 
     def _enforce_cache_limit(self):
         """Evict least-recently-used games' art until the cache is back
@@ -920,6 +964,7 @@ class GameArtProvider:
                     except OSError:
                         pass
             self._index = {}
+            self._manual_overrides = {} # Clear overrides too
             self._save_manifest()
             self._last_manifest_save = time.time()
 
@@ -962,6 +1007,24 @@ class GameArtProvider:
         album_key = _cache_key(game_title)
 
         with self._lock:
+            # Check manual overrides: song-level first, then album-level
+            manual_override = None
+            if game_title in self._manual_overrides:
+                # Song-level override: manual_overrides[album_title][song_title]
+                if song_title:
+                    song_overrides = self._manual_overrides[game_title]
+                    if isinstance(song_overrides, dict) and song_title in song_overrides:
+                        manual_override = song_overrides[song_title]
+                # Album-level override: manual_overrides[album_title] = game_name
+                if not manual_override:
+                    album_override = self._manual_overrides[game_title]
+                    if isinstance(album_override, str):
+                        manual_override = album_override
+
+            if manual_override:
+                game_title = manual_override
+                album_key = _cache_key(game_title)
+
             album_entry = self._index.get(album_key)
 
             # A cached entry resolved via the *song* title (not the
@@ -1579,7 +1642,7 @@ class GameArtProvider:
         else:
             needs_more = len(images) < self._max_images_per_game
 
-        if needs_more:
+        if needs_more and self._enable_series_siblings:
             try:
                 self._fill_from_series_siblings(game_id, matched_name, key, images)
             except Exception as e:

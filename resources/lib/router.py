@@ -34,6 +34,11 @@ class Router:
         if action == "history":
             HistoryMenu(self.handle, self.api).show_stations()
             return
+            
+        if action == "settings":
+            xbmcaddon.Addon().openSettings()
+            xbmcplugin.setResolvedUrl(self.handle, False, xbmcgui.ListItem())
+            return
 
         if action == "history_songs":
             sid = int(self.params["id"][0])

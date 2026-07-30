@@ -1,4 +1,5 @@
 import random
+import time
 
 import xbmcaddon
 import xbmcgui
@@ -248,6 +249,12 @@ class Slideshow:
         return []
 
     def tick(self, now):
+        manual_game = xbmcgui.Window(10000).getProperty("Rainwave.ManualGame")
+        if manual_game:
+            xbmcgui.Window(10000).clearProperty("Rainwave.ManualGame")
+            self.set_manual_game(manual_game)
+        # ... rest of existing tick logic ...
+    
         """Call regularly (e.g. every second) from the service loop."""
         if not self.enabled:
             return
@@ -409,3 +416,12 @@ class Slideshow:
         else:
             self.index += 1
         return self.files[self.index]
+
+    def set_manual_game(self, game_name: str):
+        """Force slideshow to use art from a specific game."""
+        self._manual_game = game_name
+        self._manual_game_set_at = time.time()
+        self._current_game = game_name
+        self._current_game_sid = None
+        self.tick(time.time())  # Trigger immediate update
+

@@ -3,7 +3,7 @@ A simple Kodi addon for Rainwave Internet Radio.
 
 ------------------------------
 
-Version 2.20
+Version 3.0.1
 
 An addon for Kodi based on the [Rainwave Api](https://rainwave.cc/api4/) for playing the different stations (All, Overclocked Remixes, Chiptunes etc.) and displaying a dialog box akin to the [Twitch Widget](https://rainwave.cc/twitch) for the current, previously played and next songs.
 
@@ -12,7 +12,7 @@ Some pointers:
 * Screensaver is disabled by default during audio playback. You can deactivate this setting to reinstate it. 
 * Artworks for the stations are not provided. You can add them to the `skins/media` subfolder. The names must match the ones given in `constants.py` with a `.png` extension.
 * The display boxes can be edited through `script-rainwave-nowplaying.xml` in the `skins/Default/1080i` subfolder. See the [KodiWiki](https://kodi.wiki/view/Add-on_development) for further documentation.
-* Settings allow to define a background images during playback, with two main settings:
+* Settings allow to define a background images during playback, with three main settings:
 
   * Local folder: define a local image folder.
   * Automatic (fetch by game): need a [SteamGridDB](https://steamgriddb.com) account and an API-key (once connected, `Preferences > API tab`). Fetching is based on the song metadata and automatically retrieves "heroes" artworks to display during playback. 
@@ -20,8 +20,11 @@ Some pointers:
     * Fetching mode is a fuzzy search: if there is no exact match, the script looks for approximate titles from the album name until something clicks.
     * If nothing works, background can loop back to the local folder solution, to "Random" (chooses a heroe artwork already downloaded), or "None" (keep the last artworks downloaded).
     * Artworks are locally stored in the `userdata/addon_data/plugin.audio.rainwave/art_cache` folder. You can set a limit for the size of the folder (0 = unlimited, otherwise the oldest artworks downloaded are erased first) or erase all of them at once with the "Clear Cache" button.
-    * You can define the number of artworks to download. Except for "all", if there is less artworks for a given game than the number define in the settings, logic will try and fetch artworks from the same serie to populate the backgrounds (e.g., it will seek artworks from "Earthworm Jim 2" and "3D" for "Earthworm Jim").
+    * You can define the number of artworks to download. By default, and except for "all", if there is less artworks for a given game than the number define in the settings, logic will try and fetch artworks from the same serie to populate the backgrounds (e.g., it will seek artworks from "Earthworm Jim 2" and "3D" for "Earthworm Jim"). You can deactivate this setting to only populate artworks with the one game scrapped.
     * Logic is not perfect, as some limit cases are not taken into account.
+
+      * To compensate, a "manual override" function is included. By pressing the `Information Key` ("i" on a keyboard by default), you can manually choose a game for a given album or a specific song to override logic and display the corresponding artwork.
+      * Overrides and automatic fetches are located in `userdata/addon_data/plugin.audio.rainwave/art_cache/manifest.json`.
    
   * Random: need a SteamGriDB API-key. Will loop through heroes already downloaded with Automatic Mode.
 
