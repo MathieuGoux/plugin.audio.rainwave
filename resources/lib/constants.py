@@ -5,7 +5,7 @@ DEFAULT_TIMEOUT = 10
 STATIONS = {
     5: "All",
     1: "Game",
-    2: "OCRemix",
+    2: "OC Remix",
     3: "Covers",
     4: "Chiptune",
     6: "Chill",

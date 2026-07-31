@@ -129,13 +129,15 @@ class NowPlayingDialog(xbmcgui.WindowXMLDialog):
             current_sid = xbmcgui.Window(10000).getProperty("Rainwave.CurrentStation")
             current_sid = int(current_sid) if current_sid else None
             current_game = xbmcgui.Window(10000).getProperty("Rainwave.ResolvedGame")
+            current_game_id = xbmcgui.Window(10000).getProperty("Rainwave.ResolvedGameId") or None
 
             dialog = GameSelectorDialog(
                 addon.getSettingString("steamgriddb_api_key"),
                 current_album=current_album,
                 current_sid=current_sid,
                 current_song_title=current_song_title,
-                current_game=current_game
+                current_game=current_game,
+                current_game_id=current_game_id
             )
             if dialog.show():
                 # Update slideshow immediately

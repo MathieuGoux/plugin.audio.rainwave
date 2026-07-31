@@ -16,13 +16,39 @@ CACHE_SUBDIR = "art_cache"
 MANIFEST_NAME = "manifest.json"
 CACHE_SCHEMA_VERSION = 13
 
+
+def _year_label(entry):
+    """Extract a display year (as a string) from a SteamGridDB game
+    object, or None if it doesn't have one. Works for both
+    /search/autocomplete result entries and a /games/id/{id} single-game
+    response -- both use the same year/release_date shape.
+    """
+    year = entry.get("year") or entry.get("release_year")
+    release_date = entry.get("release_date")
+
+    if not year and release_date is not None:
+        if isinstance(release_date, str):
+            year = release_date.split("-", 1)[0]
+        elif isinstance(release_date, int):
+            if 1900 <= release_date <= 2100:
+                # Looks like a calendar year
+                year = release_date
+            else:
+                # Assume Unix timestamp
+                year = datetime.utcfromtimestamp(release_date).year
+
+    return str(year) if year else None
+
+
 class GameSelectorDialog:
-    def __init__(self, api_key, current_album=None, current_sid=None, current_song_title=None, current_game=None):
+    def __init__(self, api_key, current_album=None, current_sid=None, current_song_title=None,
+                 current_game=None, current_game_id=None):
         self.api_key = api_key
         self.current_album = current_album #Album currently playing
         self.current_sid = current_sid #Station currently playing
         self.current_song_title = current_song_title #Song currently playing
         self.current_game = current_game #Game chosen by logic
+        self.current_game_id = current_game_id #SteamGridDB id of current_game, if known
         self.selected_game = None
 
     def show(self):
@@ -39,7 +65,11 @@ class GameSelectorDialog:
 
         prompt = f"Search for a game"
         if self.current_game:
-            prompt = f"Search for a game (Current: {self.current_game})"
+            current_label = self.current_game
+            year = self._fetch_current_game_year()
+            if year:
+                current_label = f"{current_label} ({year})"
+            prompt = f"Search for a game (Current: {current_label})"
         elif self.current_album:
             prompt = f"Search for a game (Album: {self.current_album})"
 
@@ -72,27 +102,9 @@ class GameSelectorDialog:
         names = []
 
         for g in games:
-
             name = g.get("name", "Unknown")
-            release_date = g.get("release_date")
-            year = g.get("year") or g.get("release_year")
-
-            if not year and release_date is not None:
-                if isinstance(release_date, str):
-                    year = release_date.split("-", 1)[0]
-
-                elif isinstance(release_date, int):
-                    if 1900 <= release_date <= 2100:
-                        # Looks like a calendar year
-                        year = release_date
-                    else:
-                        # Assume Unix timestamp
-                        year = datetime.utcfromtimestamp(release_date).year
-
-            if year:
-                names.append(f"{name} ({year})")
-            else:
-                names.append(name)
+            year = _year_label(g)
+            names.append(f"{name} ({year})" if year else name)
 
         selected = xbmcgui.Dialog().select(
             "Select Game",
@@ -162,6 +174,37 @@ class GameSelectorDialog:
         except Exception as e:
             log(f"Game selector failed: {e}")
         
+    def _fetch_current_game_year(self):
+        """Look up the release year for self.current_game_id (the game
+        currently resolved by the addon's logic) via SteamGridDB's
+        single-game endpoint, so the search prompt can show it next to
+        the current game's name -- useful for telling apart same-named
+        games. Returns None if there's no id to look up, or on any
+        request failure; the prompt just omits the year in that case,
+        same as before this existed.
+        """
+        if not self.current_game_id:
+            return None
+
+        url = f"{API_BASE}/games/id/{self.current_game_id}"
+
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "User-Agent": "Kodi"
+            }
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=8) as r:
+                data = json.loads(r.read())["data"]
+        except Exception as e:
+            log(f"GameSelector: couldn't fetch release year for game {self.current_game_id}: {e}")
+            return None
+
+        return _year_label(data)
+
     def _search_games(self, query):
 
         if len(query.strip()) < 2:
@@ -206,15 +249,52 @@ class GameSelectorDialog:
         if "manual_overrides" not in manifest:
             manifest["manual_overrides"] = {}
 
+        # An override now records both the SteamGridDB id and the name.
+        # The id is what actually disambiguates true homonyms (two
+        # unrelated games sharing an identical title) -- game_art.py
+        # re-searches SteamGridDB by name every time it resolves a
+        # title, so a name-only override still lands back on whichever
+        # candidate the automatic ranking prefers, which may not be
+        # the one the user picked here. Storing the id lets game_art.py
+        # skip that re-search entirely and fetch art for this exact
+        # entry.
+        override_value = {
+            "id": selected_game.get("id"),
+            "name": selected_game.get("name", ""),
+        }
+
+        # New shape per album: {"game": {...} | None, "songs": {title: {...}}}.
+        # Normalize whatever's already on disk for this album into that
+        # shape first, so saving one override type doesn't clobber a
+        # previously-saved override of the other type, and so older
+        # manifests (name-only strings, or a bare {song: name} dict)
+        # keep working instead of being silently discarded.
+        raw_entry = manifest["manual_overrides"].get(album_title)
+        if isinstance(raw_entry, dict) and ("game" in raw_entry or "songs" in raw_entry):
+            entry = raw_entry
+        elif isinstance(raw_entry, str):
+            # Legacy album-level override: name only, no id on file.
+            entry = {"game": {"id": None, "name": raw_entry}, "songs": {}}
+        elif isinstance(raw_entry, dict):
+            # Legacy song-title -> name mapping, no ids on file.
+            entry = {
+                "game": None,
+                "songs": {song: {"id": None, "name": name} for song, name in raw_entry.items()},
+            }
+        else:
+            entry = {"game": None, "songs": {}}
+
+        entry.setdefault("songs", {})
+
         # Save based on override type
         if is_song_override and self.current_song_title:
             # Song-level override
-            if album_title not in manifest["manual_overrides"]:
-                manifest["manual_overrides"][album_title] = {}
-            manifest["manual_overrides"][album_title][self.current_song_title] = selected_game.get("name", "")
+            entry["songs"][self.current_song_title] = override_value
         else:
             # Album-level override
-            manifest["manual_overrides"][album_title] = selected_game.get("name", "")
+            entry["game"] = override_value
+
+        manifest["manual_overrides"][album_title] = entry
 
         # Save back to disk
         try:

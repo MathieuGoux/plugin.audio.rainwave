@@ -968,6 +968,51 @@ class GameArtProvider:
             self._save_manifest()
             self._last_manifest_save = time.time()
 
+    def _extract_override(self, game_title, song_title):
+        """Return (override_name, override_id) for `game_title`/`song_title`,
+        or (None, None) if there's no manual override on file. Caller
+        already holds self._lock.
+
+        Handles three shapes of manifest entry, oldest first:
+          - a bare string: legacy album-level override, name only.
+          - a bare dict of {song_title: name}: legacy song-level
+            overrides, names only.
+          - {"game": {"id":.., "name":..} | None,
+             "songs": {song_title: {"id":.., "name":..}}}: current
+            format, carrying a SteamGridDB id alongside the name so a
+            true homonym can be pinned exactly (see get()'s docstring
+            note above and game_selector.py's _save_manual_override()).
+
+        Entries saved before this id-tracking change won't have an id
+        (override_id comes back None) -- get() falls back to a plain
+        name-based search for those, same as before, until the user
+        re-picks that override from game_selector.py once more.
+        """
+        raw_entry = self._manual_overrides.get(game_title)
+        if raw_entry is None:
+            return None, None
+
+        if isinstance(raw_entry, str):
+            return raw_entry, None
+
+        if isinstance(raw_entry, dict) and ("game" in raw_entry or "songs" in raw_entry):
+            if song_title:
+                song_override = (raw_entry.get("songs") or {}).get(song_title)
+                if song_override:
+                    return song_override.get("name"), song_override.get("id")
+            album_override = raw_entry.get("game")
+            if album_override:
+                return album_override.get("name"), album_override.get("id")
+            return None, None
+
+        if isinstance(raw_entry, dict):
+            # Legacy bare {song_title: name} mapping -- no ids.
+            if song_title and song_title in raw_entry:
+                return raw_entry[song_title], None
+            return None, None
+
+        return None, None
+
     def get(self, game_title, song_title=None, sid=None):
         """Return whatever background image paths are already cached
         for this title (a list, possibly empty), and kick off a
@@ -1007,22 +1052,17 @@ class GameArtProvider:
         album_key = _cache_key(game_title)
 
         with self._lock:
-            # Check manual overrides: song-level first, then album-level
-            manual_override = None
-            if game_title in self._manual_overrides:
-                # Song-level override: manual_overrides[album_title][song_title]
-                if song_title:
-                    song_overrides = self._manual_overrides[game_title]
-                    if isinstance(song_overrides, dict) and song_title in song_overrides:
-                        manual_override = song_overrides[song_title]
-                # Album-level override: manual_overrides[album_title] = game_name
-                if not manual_override:
-                    album_override = self._manual_overrides[game_title]
-                    if isinstance(album_override, str):
-                        manual_override = album_override
+            # Check manual overrides: song-level first, then album-level.
+            # An override may carry a "game_id" (see _extract_override())
+            # -- when it does, that id is used to fetch art directly,
+            # bypassing the name-based SteamGridDB search that would
+            # otherwise re-introduce the exact homonym ambiguity the
+            # user picked a specific entry to resolve (see
+            # game_selector.py's _save_manual_override()).
+            override_name, override_id = self._extract_override(game_title, song_title)
 
-            if manual_override:
-                game_title = manual_override
+            if override_name:
+                game_title = override_name
                 album_key = _cache_key(game_title)
 
             album_entry = self._index.get(album_key)
@@ -1078,18 +1118,35 @@ class GameArtProvider:
                 return []
 
             self._pending.add(key)
-            
-            try:
-                game_id, matched_name, source = self._resolve_game_id(game_title, song_title, sid)
-            except self._AuthError:
-                return []
 
-            # Store resolved game name for the manual override dialog
+            if override_id:
+                # Pinned to an exact SteamGridDB entry -- nothing to
+                # resolve, and deliberately not calling
+                # _resolve_game_id() here, since a name search is
+                # exactly what let a homonym get picked wrong in the
+                # first place.
+                game_id, matched_name = override_id, game_title
+            else:
+                try:
+                    game_id, matched_name, source = self._resolve_game_id(game_title, song_title, sid)
+                except self._AuthError:
+                    return []
+
+            # Store resolved game name/id for the manual override dialog.
+            # The id lets game_selector.py show the current game's
+            # release year (via SteamGridDB's single-game lookup)
+            # without re-searching by name, which would risk landing
+            # on a different same-named entry than the one actually
+            # resolved.
             if matched_name:
                 xbmcgui.Window(10000).setProperty("Rainwave.ResolvedGame", matched_name)
+            if game_id:
+                xbmcgui.Window(10000).setProperty("Rainwave.ResolvedGameId", str(game_id))
 
         thread = threading.Thread(
-            target=self._fetch, args=(game_title, song_title, key, sid), daemon=True
+            target=self._fetch,
+            args=(game_title, song_title, key, sid, override_id),
+            daemon=True,
         )
         thread.start()
         return []
@@ -1123,9 +1180,9 @@ class GameArtProvider:
 
     # -- background thread work below; never called from the main loop --
 
-    def _fetch(self, game_title, song_title, key, sid=None):
+    def _fetch(self, game_title, song_title, key, sid=None, override_id=None):
         try:
-            images, source = self._fetch_images(game_title, song_title, key, sid)
+            images, source = self._fetch_images(game_title, song_title, key, sid, override_id)
         except self._RateLimitedError:
             # Don't cache this as "no art found" -- we got rate-limited,
             # not a genuine empty result (see _RateLimitedError's
@@ -1624,11 +1681,21 @@ class GameArtProvider:
                 remaining = min(remaining, self._max_images_per_game - len(images))
             self._download_heroes(sibling_id, sibling.get("name", base_name), key, images, remaining)
 
-    def _fetch_images(self, game_title, song_title, key, sid=None):
-        try:
-            game_id, matched_name, source = self._resolve_game_id(game_title, song_title, sid)
-        except self._AuthError:
-            return [], None
+    def _fetch_images(self, game_title, song_title, key, sid=None, override_id=None):
+        if override_id:
+            # A manual override pinned an exact SteamGridDB entry --
+            # use it directly instead of re-running the name-based
+            # search/ranking in _resolve_game_id(). Re-searching by
+            # name here is exactly what made the override unable to
+            # fix a true homonym before: two different games can share
+            # the same name, so a name-only re-resolution has no way
+            # to tell them apart and can land back on the wrong one.
+            game_id, matched_name, source = override_id, game_title, "manual"
+        else:
+            try:
+                game_id, matched_name, source = self._resolve_game_id(game_title, song_title, sid)
+            except self._AuthError:
+                return [], None
         # _RateLimitedError deliberately NOT caught here -- it needs
         # to propagate up to _fetch(), which handles it by skipping
         # the cache write entirely rather than recording a false "no
