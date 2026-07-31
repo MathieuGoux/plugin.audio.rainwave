@@ -1,9 +1,9 @@
 # plugin.audio.rainwave
-A simple Kodi addon for Rainwave Internet Radio.
+A Kodi addon for Rainwave Internet Radio.
 
 ------------------------------
 
-Version 3.0.2
+Version 3.0.4
 
 An addon for Kodi based on the [Rainwave Api](https://rainwave.cc/api4/) for playing the different stations (All, Overclocked Remixes, Chiptunes etc.) and displaying a dialog box akin to the [Twitch Widget](https://rainwave.cc/twitch) for the current, previously played and next songs.
 
