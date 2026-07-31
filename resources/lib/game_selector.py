@@ -17,11 +17,12 @@ MANIFEST_NAME = "manifest.json"
 CACHE_SCHEMA_VERSION = 13
 
 class GameSelectorDialog:
-    def __init__(self, api_key, current_album=None, current_sid=None, current_song_title=None):
+    def __init__(self, api_key, current_album=None, current_sid=None, current_song_title=None, current_game=None):
         self.api_key = api_key
         self.current_album = current_album #Album currently playing
         self.current_sid = current_sid #Station currently playing
         self.current_song_title = current_song_title #Song currently playing
+        self.current_game = current_game #Game chosen by logic
         self.selected_game = None
 
     def show(self):
@@ -36,7 +37,15 @@ class GameSelectorDialog:
         # Debug: show what we received
         log(f"GameSelector: album={self.current_album}, song={self.current_song_title}")
 
-        keyboard = xbmc.Keyboard("", "Search for a game")
+        prompt = f"Search for a game"
+        if self.current_game:
+            prompt = f"Search for a game (Current: {self.current_game})"
+        elif self.current_album:
+            prompt = f"Search for a game (Album: {self.current_album})"
+
+        keyboard = xbmc.Keyboard("", prompt)
+
+        #keyboard = xbmc.Keyboard("", "Search for a game")
         keyboard.doModal()
 
         if not keyboard.isConfirmed():

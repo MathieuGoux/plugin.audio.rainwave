@@ -1078,6 +1078,15 @@ class GameArtProvider:
                 return []
 
             self._pending.add(key)
+            
+            try:
+                game_id, matched_name, source = self._resolve_game_id(game_title, song_title, sid)
+            except self._AuthError:
+                return []
+
+            # Store resolved game name for the manual override dialog
+            if matched_name:
+                xbmcgui.Window(10000).setProperty("Rainwave.ResolvedGame", matched_name)
 
         thread = threading.Thread(
             target=self._fetch, args=(game_title, song_title, key, sid), daemon=True
