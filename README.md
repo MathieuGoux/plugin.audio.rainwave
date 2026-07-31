@@ -17,7 +17,7 @@ Some pointers:
   * Local folder: define a local image folder.
   * Automatic (fetch by game): need a [SteamGridDB](https://steamgriddb.com) account and an API-key (once connected, `Preferences > API tab`). Fetching is based on the song metadata and automatically retrieves "heroes" artworks to display during playback. 
 
-    * Fetching mode is a fuzzy search: if there is no exact match, the script looks for approximate titles from the album name, then the song name, until something clicks.
+    * Fetching mode is a fuzzy search: if there is no exact match, the script looks for approximate titles from the album name, then the song name, until something clicks. Only exception is the "Game" station (`sid=1`), where album title is always a game title: thus, logic will look in the album name only for fetching artworks.
     * If nothing works, background can loop back to the local folder solution, to "Random" (chooses a heroe artwork already downloaded), or "None" (keep the last artworks downloaded).
     * Artworks are locally stored in the `userdata/addon_data/plugin.audio.rainwave/art_cache` folder. You can set a limit for the size of the folder (0 = unlimited, otherwise the oldest artworks downloaded are erased first) or erase all of them at once with the "Clear Cache" button.
     * You can define the number of artworks to download. By default, and except for "all", if there is less artworks for a given game than the number define in the settings, logic will try and fetch artworks from the same serie to populate the backgrounds (e.g., it will seek artworks from "Earthworm Jim 2" and "3D" for "Earthworm Jim"). You can deactivate this setting to only populate artworks with the one game scrapped.
