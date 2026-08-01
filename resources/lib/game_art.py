@@ -1007,8 +1007,6 @@ class GameArtProvider:
                 )
             return []
 
-        album_key = _cache_key(game_title)
-
         with self._lock:
             '''
             Check manual overrides: song-level first, then album-level. An override may carry a "game_id" (see _extract_override()): when it does, that id is used to fetch art directly, bypassing the name-based SteamGridDB search that would otherwise re-introduce the exact homonym ambiguity the user picked a specific entry to resolve (see game_selector.py's _save_manual_override()).
@@ -1016,27 +1014,38 @@ class GameArtProvider:
             
             override_name, override_id = self._extract_override(game_title, song_title)
 
-            if override_name:
-                game_title = override_name
+            if override_id:
+                '''
+                The cache key is derived from the pinned SteamGridDB id itself, not from the title text -- deriving it from the name (like the plain-name path below does) would make this collide with, and be silently shadowed by, any *other* cache entry that happens to display the exact same name but is actually a different SteamGridDB game. That's precisely the "true homonym" case a manual override exists to fix in the first place (e.g. two unrelated games both called "Silent Hill 2"): if the already-auto-resolved "Silent Hill 2" entry sits in the cache under a name-derived key, and the override's resolved name is *also* "Silent Hill 2", a name-derived key for the override would land on that exact same slot and just keep returning the old (possibly wrong) images forever, never noticing the override happened at all.
+
+                An id already uniquely and permanently identifies which game this is, independent of which song/album led here, so the "compilation album" per-song re-keying below doesn't apply either: two overrides (from the same or different songs/albums) that happen to share an id correctly reuse the one cache entry, and two overrides with different ids can never collide with each other, even if their names happen to match.
+                '''
+                
+                game_title = override_name or game_title
+                key = _cache_key(f"sgdb-id:{override_id}")
+                album_key = key
+            else:
+                if override_name:
+                    game_title = override_name
                 album_key = _cache_key(game_title)
 
-            album_entry = self._index.get(album_key)
+                album_entry = self._index.get(album_key)
 
-            '''
-            A cached entry resolved via the *song* title (not the album title) means the album itself didn't map to one specific game on its own: almost always a sign it's a compilation/anthology album covering several different games' music, where whichever game the album-level cache entry happened to land on only really describes the one song that resolved it. A different song on that same album could just as easily be a remix of a completely different game, so rather than keep applying that first song's art to every other song on the album, a song that doesn't match the one already on file gets its own independent cache entry (keyed on album+song together) and its own fresh resolution attempt.
-            
-            Album-title-sourced entries don't get this treatment: the album title itself was specific enough to resolve something on its own, so it's treated as applying to the whole album, same as before this existed.
-            '''
-            
-            if (
-                album_entry is not None
-                and album_entry.get("source") == "song"
-                and song_title
-                and song_title != album_entry.get("resolved_song_title")
-            ):
-                key = _cache_key(f"{game_title}\x1f{song_title}")
-            else:
-                key = album_key
+                '''
+                A cached entry resolved via the *song* title (not the album title) means the album itself didn't map to one specific game on its own: almost always a sign it's a compilation/anthology album covering several different games' music, where whichever game the album-level cache entry happened to land on only really describes the one song that resolved it. A different song on that same album could just as easily be a remix of a completely different game, so rather than keep applying that first song's art to every other song on the album, a song that doesn't match the one already on file gets its own independent cache entry (keyed on album+song together) and its own fresh resolution attempt.
+                
+                Album-title-sourced entries don't get this treatment: the album title itself was specific enough to resolve something on its own, so it's treated as applying to the whole album, same as before this existed.
+                '''
+                
+                if (
+                    album_entry is not None
+                    and album_entry.get("source") == "song"
+                    and song_title
+                    and song_title != album_entry.get("resolved_song_title")
+                ):
+                    key = _cache_key(f"{game_title}\x1f{song_title}")
+                else:
+                    key = album_key
 
             entry = self._index.get(key)
             is_pending = key in self._pending
