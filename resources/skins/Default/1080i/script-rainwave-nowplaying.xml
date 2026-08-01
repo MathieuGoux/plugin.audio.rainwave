@@ -1,22 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <window>
-    <!-- This dialog is shown with show(), never doModal(), and has no
-         focusable controls, so it floats on top of whatever the user
-         is browsing without stealing remote/keyboard input. -->
+    <!-- This dialog is shown with show(), never doModal(), and has no focusable controls, so it floats on top of whatever the user is browsing without stealing remote/keyboard input. -->
     <coordinates>
         <system>0</system>
     </coordinates>
 
     <controls>
-        <!-- background slideshow, drawn first so it sits behind
-             everything else. Only visible once a folder has actually
-             been configured in Add-on Settings > Slideshow;
-             service.py clears the property when the feature is off,
-             so this stays hidden otherwise. The solid backdrop below
-             sits underneath the crossfade: if the two fading
-             slides ever dip below 100% combined opacity at the same
-             instant, this is what shows through instead of whatever
-             sits behind the dialog. -->
+        <!-- background slideshow, drawn first so it sits behind everything else. Only visible once a folder has actually been configured in Add-on Settings > Slideshow; service.py clears the property when the feature is off, so this stays hidden otherwise. The solid backdrop below sits underneath the crossfade: if the two fading slides ever dip below 100% combined opacity at the same instant, this is what shows through instead of whatever sits behind the dialog. -->
         <control type="image">
             <visible>!IsEmpty(Window(10000).Property(Rainwave.SlideshowPath))</visible>
             <posx>0</posx>
@@ -26,21 +16,7 @@
             <texture colordiffuse="FF000000">white.png</texture>
         </control>
 
-        <!-- Hero art from SteamGridDB is very wide/short relative to
-             a 16:9 screen (e.g. 1920x620, ~3.1:1 vs 1.78:1). "scale"
-             aspectratio (crop-to-fill) was zooming in and
-             cropping the left/right edges off to cover the full
-             1920x1080 frame. Each slot is now a group with two
-             layers instead of a single image: a cropped, dimmed
-             blow-up filling the frame (so there's no empty space),
-             behind the same image again at aspectratio="keep" (fully
-             visible, letterboxed) on top: the classic "blurred
-             backdrop behind a letterboxed picture" look, minus an
-             actual blur (Kodi's <image> control has no blur filter
-             to reach for here; dimming alone is enough to keep it
-             from reading as a second, competing copy of the image).
-             The fade animation moves to the group so both layers of
-             a slot cross-fade together as one unit. -->
+        <!-- Hero art from SteamGridDB is very wide/short relative to a 16:9 screen (e.g. 1920x620, ~3.1:1 vs 1.78:1). "scale" aspectratio (crop-to-fill) was zooming in and cropping the left/right edges off to cover the full 1920x1080 frame. Each slot is now a group with two layers instead of a single image: a cropped, dimmed blow-up filling the frame (so there's no empty space), behind the same image again at aspectratio="keep" (fully visible, letterboxed) on top: the classic "blurred backdrop behind a letterboxed picture" look, minus an actual blur (Kodi's <image> control has no blur filter to reach for here; dimming alone is enough to keep it from reading as a second, competing copy of the image). The fade animation moves to the group so both layers of a slot cross-fade together as one unit. -->
         <control type="group">
             <visible>String.IsEqual(Window(10000).Property(Rainwave.SlideshowActive),A)</visible>
             <animation effect="fade" time="1000">VisibleChange</animation>
@@ -108,17 +84,7 @@
                 <texture colordiffuse="C0000000">white.png</texture>
             </control>
 
-            <!-- settings shortcut: opens this addon's settings directly
-                 from the playback view. The dialog otherwise forwards
-                 all remote/keyboard navigation to the window underneath
-                 (see nowplaying_dialog.py) rather than reacting to it
-                 itself, so a focusable control here would never
-                 actually receive an OK/Select press. Mouse and touch
-                 clicks bypass that forwarding entirely and reach
-                 controls directly though, so this works for mouse and
-                 touch users. Remote/keyboard users get the same action
-                 via the context-menu button instead (see onAction() in
-                 nowplaying_dialog.py). -->
+            <!-- settings shortcut: opens this addon's settings directly from the playback view. The dialog otherwise forwards all remote/keyboard navigation to the window underneath (see nowplaying_dialog.py) rather than reacting to it itself, so a focusable control here would never actually receive an OK/Select press. Mouse and touch clicks bypass that forwarding entirely and reach controls directly though, so this works for mouse and touch users. Remote/keyboard users get the same action via the context-menu button instead (see onAction() in nowplaying_dialog.py). -->
             <control type="button" id="503">
                 <posx>1300</posx>
                 <posy>14</posy>
@@ -130,15 +96,7 @@
                 <label></label>
             </control>
 
-            <!-- Everything below is the real now-playing content:
-                 hidden for as long as service.py hasn't yet caught
-                 the display up with the actual (still-buffering)
-                 audio, in favor of the "Tuning in..." placeholder
-                 further down. See Rainwave.Buffering in
-                 service.py/sync_queue.py: without this, tuning in
-                 just looks like the widget failed to load for the
-                 first ~15-20 seconds, rather than looking like it's
-                 deliberately waiting for something. -->
+            <!-- Everything below is the real now-playing content: hidden for as long as service.py hasn't yet caught the display up with the actual (still-buffering) audio, in favor of the "Tuning in..." placeholder further down. See Rainwave.Buffering in service.py/sync_queue.py: without this, tuning in just looks like the widget failed to load for the first ~15-20 seconds, rather than looking like it's deliberately waiting for something. -->
             <control type="group">
                 <visible>!String.IsEqual(Window(10000).Property(Rainwave.Buffering),true)</visible>
 
@@ -229,11 +187,7 @@
             </control>
 
             <!-- playback progress bar -->
-            <!-- Driven directly from Python (nowplaying_dialog.py),
-                 not $INFO: Rainwave is a live stream, not a seekable
-                 file, so Kodi's own Player.Progress infolabel doesn't
-                 reflect song position. setPercent()/setLabel() are
-                 called on these control IDs once a second instead. -->
+            <!-- Driven directly from Python (nowplaying_dialog.py), not $INFO: Rainwave is a live stream, not a seekable file, so Kodi's own Player.Progress infolabel doesn't reflect song position. setPercent()/setLabel() are called on these control IDs once a second instead. -->
             <control type="progress">
                 <id>501</id>
                 <posx>270</posx>
@@ -257,34 +211,11 @@
 
             </control>
 
-            <!-- buffering placeholder: see the comment above where
-                 the content group opens. Centered in the same card
-                 area the real content occupies.
-
-                 font18 is actually a 120pt bold font (see Font.xml),
-                 the same one used for the "Now playing" header above,
-                 so the label height here is generous on purpose to
-                 give it room; a tight height would just clip the
-                 text rather than shrink it, since Kodi doesn't
-                 auto-scale font size to fit a control. -->
+            <!-- buffering placeholder: see the comment above where the content group opens. Centered in the same card area the real content occupies. font18 is actually a 120pt bold font (see Font.xml), the same one used for the "Now playing" header above, so the label height here is generous on purpose to give it room; a tight height would just clip the text rather than shrink it, since Kodi doesn't auto-scale font size to fit a control. -->
             <control type="group">
                 <visible>String.IsEqual(Window(10000).Property(Rainwave.Buffering),true)</visible>
 
-                <!-- spinning "in progress" indicator. Two attempts at
-                     a native Kodi <animation effect="rotate"> both
-                     failed to render at all, so rather than guess a
-                     third time at syntax I can't actually test, this
-                     instead reuses the one animation technique
-                     already proven to work throughout this addon
-                     (the slideshow crossfade, the up-next/previous
-                     panel): drive it from Python instead. service.py
-                     cycles Rainwave.SpinnerFrame through 12
-                     pre-rotated frames (resources/media/spinner_00.png
-                     .. spinner_11.png) once every tick while
-                     Rainwave.Buffering is set, and this control just
-                     displays whichever one is current, the same
-                     $INFO-bound-to-a-Python-set-property pattern the
-                     album art and background images already use. -->
+                <!-- spinning "in progress" indicator. service.py cycles Rainwave.SpinnerFrame through 12 pre-rotated frames (resources/media/spinner_00.png .. spinner_11.png) once every tick while Rainwave.Buffering is set, and this control just displays whichever one is current, the same $INFO-bound-to-a-Python-set-property pattern the album art and background images already use. -->
                 <control type="image">
                     <posx>651</posx>
                     <posy>40</posy>
@@ -305,14 +236,7 @@
                     <label>[B]Tuning in...[/B]</label>
                 </control>
 
-                <!-- underline: a plain color bar rather than an
-                     underscore string of text, the same technique
-                     as the "up next / previously played" divider
-                     further down this file. A text-based line at
-                     font18's size rendered far wider than its box and
-                     got ellipsis-truncated; a fixed-width image bar
-                     doesn't have that problem and is easy to size and
-                     position precisely right under the label above. -->
+                <!-- underline: a plain color bar rather than an underscore string of text, the same technique as the "up next / previously played" divider further down this file. A text-based line at font18's size rendered far wider than its box and got ellipsis-truncated; a fixed-width image bar doesn't have that problem and is easy to size and position precisely right under the label above. -->
                 <control type="image">
                     <posx>575</posx>
                     <posy>158</posy>
@@ -335,21 +259,7 @@
 
         </control>
 
-        <!-- previous / next panel, sitting to the right of the
-             now-playing card at the same height. Split into two equal
-             halves by a horizontal divider: "up next" on top,
-             "previously played" below; each laid out exactly like a
-             smaller now-playing card (artwork left, gold header +
-             divider, title, artist) so the same visual language
-             repeats at both the panel and row level.
-             Rainwave doesn't expose live vote counts for an open
-             election (see api.py), so there's no reliable single
-             "winner" to show in the top half; instead widget.py
-             rotates through every candidate one at a time, advancing
-             once per 5-second poll, so all of them get shown in turn
-             rather than guessing.
-             Hidden entirely when the "Show previous / up next panel"
-             setting is off. -->
+        <!-- previous / next panel, sitting to the right of the now-playing card at the same height. Split into two equal halves by a horizontal divider: "up next" on top, "previously played" below; each laid out exactly like a smaller now-playing card (artwork left, gold header + divider, title, artist) so the same visual language repeats at both the panel and row level. Rainwave doesn't expose live vote counts for an open election (see api.py), so there's no reliable single "winner" to show in the top half; instead widget.py rotates through every candidate one at a time, advancing once per 5-second poll, so all of them get shown in turn rather than guessing. Hidden entirely when the "Show previous / up next panel" setting is off. -->
         <control type="group">
             <visible>String.IsEqual(Window(10000).Property(Rainwave.ShowPrevNext),true)</visible>
             <posx>1430</posx>
@@ -372,16 +282,7 @@
             </control>
 
             <!-- ===== up next (top half) ===== -->
-            <!-- Rainwave doesn't expose live vote counts for an open
-                 election (see api.py), so widget.py rotates through
-                 every candidate here instead of guessing a winner,
-                 swapping which one is shown every 15 seconds. Same
-                 double-buffered A/B slot + fade technique as the
-                 picture slideshow above: two overlapping copies of
-                 this row, each bound to one slot, with the inactive
-                 one always pre-populated before the swap so the fade
-                 crossfades between two fully-loaded candidates rather
-                 than popping through a blank state. -->
+            <!-- Rainwave doesn't expose live vote counts for an open election (see api.py), so widget.py rotates through every candidate here instead of guessing a winner, swapping which one is shown every 15 seconds. Same double-buffered A/B slot + fade technique as the picture slideshow above: two overlapping copies of this row, each bound to one slot, with the inactive one always pre-populated before the swap so the fade crossfades between two fully-loaded candidates rather than popping through a blank state. -->
 
             <control type="group">
                 <visible>String.IsEqual(Window(10000).Property(Rainwave.NextActive),A)</visible>

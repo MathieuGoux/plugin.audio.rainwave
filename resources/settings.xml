@@ -1,7 +1,45 @@
+<!--
+
+Rainwave Kodi Addon - Settings Definition
+
+This file defines all user-configurable settings for the addon. Settings are displayed in Kodi's addon settings dialog and can be accessed via xbmcaddon.Addon().getSettingXxx() methods in Python.
+
+SETTING TYPES:
+    - bool: On/Off toggle (checkbox)
+    - integer: Numeric value with range (spinner)
+    - string: Text input (text field)
+    - enum: Selection from predefined list (dropdown)
+
+SETTING STRUCTURE:
+    Each setting has:
+        - id: Unique identifier (used in code)
+        - type: Data type (bool, integer, string, enum)
+        - label: Display name in settings dialog
+        - default: Default value
+        - description: Help text (optional)
+
+CATEGORY ORGANIZATION:
+    Settings are grouped into logical categories using <category> tags. This improves the user experience in the settings dialog.
+
+SETTINGS ACCESS IN CODE:
+    In Python, access settings using:
+    - getSettingBool(id): For boolean settings
+    - getSettingInt(id): For integer settings
+    - getSettingString(id): For string settings
+
+EXAMPLE:
+    addon = xbmcaddon.Addon()
+    enabled = addon.getSettingBool("slideshow_enabled")
+    source = addon.getSettingInt("slideshow_source")
+    path = addon.getSettingString("slideshow_path")
+-->
+
 <settings>
     <category label="Display">
+        <!--DISPLAY SETTINGS. Controls what is shown in the now-playing display.-->
         <setting id="show_prev_next" type="bool"
                  label="Show previous / up next panel"
+                 help="When enabled, show panels displaying previous and upcoming songs. When disabled, hides these panels."
                  default="true"/>
         <setting id="inhibit_screensaver" type="bool"
                  label="Prevent screensaver during playback"
@@ -20,8 +58,10 @@
                  visible="eq(-1,true)"/>
     </category>
     <category label="Slideshow">
+        <!--Slidehosw SETTINGS. Background image slideshow configuration.-->
         <setting id="slideshow_enabled" type="bool"
                  label="Show picture slideshow behind Now Playing"
+                 help="Enable or disable the background slideshow."
                  default="false"/>
         <setting id="slideshow_source" type="enum"
                  label="Background source"
@@ -63,8 +103,12 @@
                  visible="eq(-7,true) + eq(-6,1)"/>
         <setting id="slideshow_time" type="slider"
                  label="Seconds per image"
+                 help="Define how long each image stays on screen before rotating to the ntext."
                  default="8" range="2,1,60" option="int"
                  visible="eq(-8,true)"/>
-        <setting id="enable_series_siblings" type="bool" label="Look up sibling games for more art" default="true"/>
+        <setting id="enable_series_siblings" type="bool" 
+                 label="Look up sibling games for more art" 
+                 help="Enable / Disable extended search to games from the same series to match the number set for background images."
+                 default="true"/>
     </category>
 </settings>

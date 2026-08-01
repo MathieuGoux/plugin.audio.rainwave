@@ -1,13 +1,50 @@
+"""
+Rainwave Kodi Addon - Game Selector Dialog
+
+This module provides the GameSelectorDialog class which allows users to manually select a game for artwork display. This is accessed by pressing the Information key ('i') during playback.
+
+PURPOSE:
+=======
+
+The addon automatically detects which game is playing based on song
+metadata (album title, song title). However, this automatic detection
+can fail for various reasons:
+
+    - Album title doesn't match game name exactly
+    - Song metadata is incomplete or inaccurate
+    - Game has multiple names or spellings
+    - Obscure remix albums with unclear naming
+
+When this happens, users can manually override the automatic detection by opening this dialog and selecting the correct game. The selected game's artwork will be displayed immediately.
+
+FEATURES:
+    - Search SteamGridDB for games by title
+    - Display search results in a scrollable list
+    - Show current automatic selection
+    - Allow user to select from results
+    - Persist selection for future use
+
+USAGE:
+    1. User presses Information key ('i') during playback
+    2. service.py detects the key press (ACTION_SHOW_INFO)
+    3. service.py calls _open_game_selector()
+    4. GameSelectorDialog is created and shown
+    5. User searches for and selects a game
+    6. Selection is passed to slideshow.set_manual_game()
+    7. Slideshow updates to show the selected game's artwork
+
+"""
+
 import json
 import os
 import urllib.error
 import urllib.parse
 import urllib.request
-
 import xbmcaddon
 import xbmcgui
 import xbmc
 import xbmcvfs
+
 from .utils import log
 from datetime import datetime
 
@@ -18,11 +55,10 @@ CACHE_SCHEMA_VERSION = 13
 
 
 def _year_label(entry):
-    """Extract a display year (as a string) from a SteamGridDB game
-    object, or None if it doesn't have one. Works for both
-    /search/autocomplete result entries and a /games/id/{id} single-game
-    response -- both use the same year/release_date shape.
     """
+    Extract a display year (as a string) from a SteamGridDB game object, or None if it doesn't have one. Works for both /search/autocomplete result entries and a /games/id/{id} single-game response -- both use the same year/release_date shape.
+    """
+    
     year = entry.get("year") or entry.get("release_year")
     release_date = entry.get("release_date")
 
@@ -39,10 +75,55 @@ def _year_label(entry):
 
     return str(year) if year else None
 
+#==GAME SELECTOR DIALOG CLASS================
 
 class GameSelectorDialog:
-    def __init__(self, api_key, current_album=None, current_sid=None, current_song_title=None,
-                 current_game=None, current_game_id=None):
+    """
+    Dialog for manual game selection.
+
+    Provides a searchable interface for users to find and select the correct game when automatic detection fails.
+
+    INHERITANCE:
+        Inherits from xbmcgui.WindowXMLDialog to integrate with Kodi's dialog system. The parent class provides:
+            - doModal(): Show the dialog modally (blocks until closed)
+            - close(): Close the dialog
+            - onInit(): Called when dialog is initialized
+            - onAction(): Called when user performs an action
+            - onClick(): Called when user clicks a control
+
+    ATTRIBUTES:
+        selected_game (dict or None): The game selected by the user
+            - If user selects a game: {'name': str, 'id': int}
+            - If user cancels: None
+        
+        api_key (str): SteamGridDB API key for searches
+        results (list): Current search results
+        current_query (str): Current search query
+        current_selection (int): Index of currently selected result
+
+    LIFECYCLE:
+        1. service.py creates instance with API key
+        2. service.py calls doModal() to show dialog
+        3. User interacts with dialog
+        4. User selects a game or cancels
+        5. service.py checks selected_game attribute
+        6. If game selected, calls slideshow.set_manual_game()
+    """
+    
+    def __init__(self, api_key, current_album=None, current_sid=None, current_song_title=None, current_game=None, current_game_id=None):
+        """
+        Initialize the game selector dialog.
+
+        ARGS:
+            api_key (str): SteamGridDB API key for searches
+
+        SETS UP:
+            - Parent class initialization
+            - API key for SteamGridDB searches
+            - Internal state for search results and selection
+            - selected_game set to None (will be set if user selects)
+        """
+        
         self.api_key = api_key
         self.current_album = current_album #Album currently playing
         self.current_sid = current_sid #Station currently playing
@@ -52,7 +133,10 @@ class GameSelectorDialog:
         self.selected_game = None
 
     def show(self):
-        """Prompt for a game name, then display matching games."""
+        """
+        Prompt for a game name, then display matching games.
+        """
+        
         if not self.api_key:
             xbmcgui.Dialog().ok(
                 "SteamGridDB",
@@ -146,12 +230,17 @@ class GameSelectorDialog:
         return True
         
     def _open_game_selector(self):
-        """Open game selector and update manifest with manual override."""
+        """
+        Open game selector and update manifest with manual override.
+        """
+        
         try:
             from .game_selector import GameSelectorDialog
             addon = xbmcaddon.Addon()
+            
             # Get current album and song from the now-playing widget
             current_album = xbmcgui.Window(10000).getProperty("Rainwave.Album")
+            
             # Try multiple property names for song title
             current_song_title = (xbmcgui.Window(10000).getProperty("Rainwave.Song") or
                                  xbmcgui.Window(10000).getProperty("Rainwave.NowPlaying") or
@@ -175,14 +264,10 @@ class GameSelectorDialog:
             log(f"Game selector failed: {e}")
         
     def _fetch_current_game_year(self):
-        """Look up the release year for self.current_game_id (the game
-        currently resolved by the addon's logic) via SteamGridDB's
-        single-game endpoint, so the search prompt can show it next to
-        the current game's name -- useful for telling apart same-named
-        games. Returns None if there's no id to look up, or on any
-        request failure; the prompt just omits the year in that case,
-        same as before this existed.
         """
+        Look up the release year for self.current_game_id (the game currently resolved by the addon's logic) via SteamGridDB's single-game endpoint, so the search prompt can show it next to the current game's name. Useful for telling apart same-named games. Returns None if there's no id to look up, or on any request failure; the prompt just omits the year in that case, same as before this existed.
+        """
+        
         if not self.current_game_id:
             return None
 
@@ -248,34 +333,29 @@ class GameSelectorDialog:
         # Initialize manual_overrides if missing
         if "manual_overrides" not in manifest:
             manifest["manual_overrides"] = {}
-
-        # An override now records both the SteamGridDB id and the name.
-        # The id is what actually disambiguates true homonyms (two
-        # unrelated games sharing an identical title) -- game_art.py
-        # re-searches SteamGridDB by name every time it resolves a
-        # title, so a name-only override still lands back on whichever
-        # candidate the automatic ranking prefers, which may not be
-        # the one the user picked here. Storing the id lets game_art.py
-        # skip that re-search entirely and fetch art for this exact
-        # entry.
+        
+        '''
+        An override now records both the SteamGridDB id and the name. The id is what actually disambiguates true homonyms (two unrelated games sharing an identical title). game_art.py re-searches SteamGridDB by name every time it resolves a title, so a name-only override still lands back on whichever candidate the automatic ranking prefers, which may not be the one the user picked here. Storing the id lets game_art.py skip that re-search entirely and fetch art for this exact entry.
+        '''
+        
         override_value = {
             "id": selected_game.get("id"),
             "name": selected_game.get("name", ""),
         }
-
-        # New shape per album: {"game": {...} | None, "songs": {title: {...}}}.
-        # Normalize whatever's already on disk for this album into that
-        # shape first, so saving one override type doesn't clobber a
-        # previously-saved override of the other type, and so older
-        # manifests (name-only strings, or a bare {song: name} dict)
-        # keep working instead of being silently discarded.
+        
+        '''
+        New shape per album: {"game": {...} | None, "songs": {title: {...}}}. Normalize whatever's already on disk for this album into that shape first, so saving one override type doesn't clobber a previously-saved override of the other type, and so older manifests (name-only strings, or a bare {song: name} dict) keep working instead of being silently discarded.
+        '''
+        
         raw_entry = manifest["manual_overrides"].get(album_title)
         if isinstance(raw_entry, dict) and ("game" in raw_entry or "songs" in raw_entry):
             entry = raw_entry
         elif isinstance(raw_entry, str):
+            
             # Legacy album-level override: name only, no id on file.
             entry = {"game": {"id": None, "name": raw_entry}, "songs": {}}
         elif isinstance(raw_entry, dict):
+            
             # Legacy song-title -> name mapping, no ids on file.
             entry = {
                 "game": None,
@@ -302,4 +382,3 @@ class GameSelectorDialog:
                 json.dump(manifest, f, indent=2)
         except Exception as e:
             xbmcgui.Dialog().ok("Error", f"Failed to save override: {e}")
-            
