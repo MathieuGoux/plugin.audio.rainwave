@@ -295,4 +295,5 @@ I completely understand if that's a deal-breaker for some people. I avoided rely
 ---
 
 *Last updated: August 01, 2026*
+
 *Version: 3.0.5*
