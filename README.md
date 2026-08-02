@@ -10,22 +10,22 @@
 
 ## **Table of Contents**
 
-- [Features](#-features)
-- [Installation](#-installation)
-- [Usage](#-usage)
-- [Configuration](#-configuration)
-- [Customization](#-customization)
-- [Technical Details](#-technical-details)
-- [Limitations](#-limitations)
-- [Contributing](#-contributing)
-- [Acknowledgments](#-acknowledgments)
-- [License](#-license)
+- [Features](#features)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [Customization](#customization)
+- [Technical Details](#technical-details)
+- [Limitations](#limitations)
+- [Contributing](#contributing)
+- [Acknowledgments](#acknowledgments)
+- [License](#license)
 
 ---
 
 [Rainwave](https://rainwave.cc/game/) is a Internet web radio specialized in video game music. This Kodi addon allows audio playback on all 6 stations, with information widgets and customizable background slideshows.
 
-## Features
+## **Features**
 
 ### Main Functionalities
 
