@@ -3,6 +3,7 @@
 **A Kodi addon for Rainwave Internet Radio**
 
 [Kodi](https://kodi.tv)
+
 [License: GPL-3.0](https://www.gnu.org/licenses/gpl-3.0)
 
 ---
@@ -21,6 +22,8 @@
 - [Acknowledgments](#-acknowledgments)
 
 ---
+
+[Rainwave](https://rainwave.cc/game/) is a Internet web radio specialized in video game music. This Kodi addon allows audio playback on all 6 stations, with information widgets and customizable background slideshows.
 
 ## **Features**
 
