@@ -18,8 +18,8 @@
 - [Technical Details](#-technical-details)
 - [Limitations](#-limitations)
 - [Contributing](#-contributing)
-- [License](#-license)
 - [Acknowledgments](#-acknowledgments)
+- [License](#-license)
 
 ---
 
