@@ -274,9 +274,7 @@ That said, you're more than welcome to fork the repository, add new features, fi
 ---
 
 ## **License**
-This project is licensed under the GNU General Public License v3.0 or later - see the LICENSE file for details.
-
-GPL-3.0-or-later
+This project is licensed under the GNU General Public License v3.0 or later.
 
 Copyright (C) 2026 Mathieu Goux (MG)
 
