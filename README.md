@@ -121,6 +121,7 @@ Access settings from the addon menu or via Kodi's addon settings.
    - Automatically fetches hero artwork for currently playing game
    - Uses album title as primary search, then look for clues in song title if no perfect match is found (for "Game" station, only uses album title for the search, as it is always the exact game name)
       - To correct the artworks automatically downloaded, press the `Information Key` (`i` by default) to manually override the correct game to choose from, for the entire album or for a given song in case of a compilation album. Overrides should apply during playback.
+   - You can set the maximum number or artworks to retrieve, from 1 to "10" or choose to download all artworks from a given game. Except for the "all" settings, you can choose to download artworks from a sibling game (i.e., "Earthworm Jim 2" for "Earthworm Jim" and vice versa) to try to attain the set number.
 
 #### 3. Random Mode
    - Uses cached game artwork from SteamGridDB
