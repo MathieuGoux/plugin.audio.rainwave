@@ -382,3 +382,12 @@ class GameSelectorDialog:
                 json.dump(manifest, f, indent=2)
         except Exception as e:
             xbmcgui.Dialog().ok("Error", f"Failed to save override: {e}")
+            return
+
+        '''
+        The running GameArtProvider instance (the one slideshow.py's tick() actually calls .get() against, once a second) keeps its own in-memory copy of manual_overrides. It only refreshes that copy from disk after it completes an actual fetch, or every MANIFEST_SAVE_INTERVAL (currently 5 minutes) -- see game_art.py's _save_manifest()/_maybe_save_manifest(). Since this override was just written straight to disk from here, without either of those happening yet, the live instance would otherwise keep serving whatever was already cached under the old key for up to 5 minutes, which looks indistinguishable from "the override didn't work".
+
+        Setting this property mirrors the existing Rainwave.ManualGame mechanism below: slideshow.py's tick() checks for it on every poll and calls reload_manual_overrides() on its live GameArtProvider as soon as it sees it, so the override the user just picked applies on the very next poll instead of waiting on either of the paths above.
+        '''
+        
+        xbmcgui.Window(10000).setProperty("Rainwave.OverridesDirty", "1")

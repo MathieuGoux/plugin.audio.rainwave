@@ -417,12 +417,21 @@ class Slideshow:
 
         MANUAL GAME SELECTION:
             Checks for "Rainwave.ManualGame" property set by game_selector.py. If found, clears the property and calls set_manual_game().
+
+        MANUAL OVERRIDE REFRESH:
+            Checks for "Rainwave.OverridesDirty" property set by game_selector.py's _save_manual_override() right after it writes a new/changed override to manifest.json on disk. self.game_art (the GameArtProvider actually used below) only reloads its own in-memory manual_overrides after completing a fetch or via a 5-minute throttle otherwise (see game_art.py's _save_manifest()/_maybe_save_manifest()), so without this, a just-saved override could sit invisible to this running instance -- still serving whatever was cached before it existed -- for up to 5 minutes.
         """
         
         manual_game = xbmcgui.Window(10000).getProperty("Rainwave.ManualGame")
         if manual_game:
             xbmcgui.Window(10000).clearProperty("Rainwave.ManualGame")
             self.set_manual_game(manual_game)
+
+        overrides_dirty = xbmcgui.Window(10000).getProperty("Rainwave.OverridesDirty")
+        if overrides_dirty:
+            xbmcgui.Window(10000).clearProperty("Rainwave.OverridesDirty")
+            if self.game_art:
+                self.game_art.reload_manual_overrides()
     
         """
         Call regularly (e.g. every second) from the service loop.

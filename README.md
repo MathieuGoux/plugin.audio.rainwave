@@ -297,6 +297,6 @@ I completely understand if that's a deal-breaker for some people. I avoided rely
 
 ---
 
-*Last updated: August 01, 2026*
+*Last updated: August 04, 2026*
 
-*Version: 3.0.6*
+*Version: 3.0.7*

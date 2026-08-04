@@ -789,9 +789,12 @@ class GameArtProvider:
         try:
             with open(self._manifest_path(), "r", encoding="utf-8") as f:
                 data = json.load(f)
-            self._manual_overrides = data.get("manual_overrides", {})
+            overrides = data.get("manual_overrides", {})
         except Exception:
-            self._manual_overrides = {}
+            overrides = {}
+
+        with self._lock:
+            self._manual_overrides = overrides
             
     def _save_manifest(self):
         """
@@ -1162,17 +1165,17 @@ class GameArtProvider:
 
         with self._lock:
             now = time.time()
+            # resolved_song_title is only meaningful when source=="song"
+            # (see get()'s "compilation album" handling). Recorded
+            # regardless of whether this fetch used the plain album key
+            # or an album+song composite key, so a later, different
+            # song of the same album can tell the two apart.
             self._index[key] = {
                 "title": game_title,
                 "images": images,
                 "fetched_at": now,
                 "last_used_at": now,
                 "source": source,
-                
-                '''
-                Only meaningful when source=="song" (see get()'s "compilation album" handling). Recorded regardless of whether this fetch used the plain album key or an album+song composite key, so a later, different song of the same album can tell the two apart.
-                '''
-                
                 "resolved_song_title": song_title if source == "song" else None,
             }
             self._pending.discard(key)
