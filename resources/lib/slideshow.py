@@ -165,6 +165,8 @@ class Slideshow:
         self._current_song_title = None
         self._current_sid = None
         self._last_random_refresh = 0
+        self._last_fallback_refresh = 0
+        self._fallback_epoch = 0
         self._settings_loaded = False
         self.reload_settings()
 
@@ -265,6 +267,8 @@ class Slideshow:
         '''
         
         self._last_random_refresh = 0
+        self._last_fallback_refresh = 0
+        self._fallback_epoch = 0
         self.index = -1
         self.active_slot = "A"
         self.preloaded = False
@@ -462,9 +466,18 @@ class Slideshow:
                 
                 '''
                 Deliberately *not* keyed on which game/title we fell back for: see the comment below on why staying "fallback" across an unmatched-to-unmatched game change doesn't retrigger a reshuffle.
+
+                It IS keyed on _fallback_epoch, though: a fallback "episode" can run for a long time (several unmatched albums back to back), and without something to bump this key periodically, the very first batch drawn when the episode started would just keep being reused for its entire duration -- fallback_pool() would keep computing a fresh random draw every tick same as always, but it'd be silently discarded every time after the first, since nothing here would ever notice it changed. RANDOM_REFRESH_INTERVAL (same cadence SOURCE_RANDOM mode uses) below is what actually bumps the epoch. "local" fallback doesn't need this: _fallback_pool() already re-reads the folder fresh every tick, so a real folder change is picked up on its own without a periodic nudge here.
                 '''
                 
-                key = ("fallback",) if fallback else None
+                if (
+                    self._auto_fallback == "random"
+                    and now - self._last_fallback_refresh >= RANDOM_REFRESH_INTERVAL
+                ):
+                    self._last_fallback_refresh = now
+                    self._fallback_epoch += 1
+
+                key = ("fallback", self._fallback_epoch) if fallback else None
 
             if key is not None and key != self._files_key:
                 self._files_key = key
@@ -472,7 +485,7 @@ class Slideshow:
                     self.files = images
                 else:
                     '''
-                    Shuffle a fresh copy on every real transition into fallback, rather than reusing a fixed order; otherwise every fallback episode would restart at the same spot, which is exactly the "always the same pictures first" problem this avoids. Deliberately only on a genuine transition (game match found, then lost again, or true startup) rather than every tick spent showing the fallback, or every unmatched-game-to-unmatched-game change within it: reshuffling constantly would restart the crossfade cycle non-stop instead of settling into a normal rotation.
+                    Shuffle a fresh copy whenever the key above changes -- a genuine transition into fallback, or the periodic epoch bump partway through a long fallback episode -- rather than reusing a fixed order for the episode's whole duration, which is exactly the "always the same handful of pictures" problem this (plus the epoch bump above) avoids. Not reshuffled on every single tick spent in fallback, nor on every unmatched-game-to-unmatched-game change within it: that would restart the crossfade cycle non-stop instead of settling into a normal rotation between refreshes.
                     '''
                     
                     self.files = list(fallback)
