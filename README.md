@@ -33,7 +33,6 @@
 - **Metadata display** showing current, previous, and upcoming songs
 - **Album artwork** automatically fetched and displayed
 - **Real-time updates** as songs change on the stream
-- **Multiple station support**: All, Game, OC Remix, Covers, Chiptune, Chill
 
 ### Visual Enhancements
 
